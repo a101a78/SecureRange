@@ -10,13 +10,13 @@ import config
 model = YOLO(config.YOLO_MODEL_PATH)
 
 
-def video_reader(file_path, frames_queue, stop_event):
+def video_reader(file_path, frames_dict, stop_event):
     """
-    비디오 파일에서 프레임을 읽어 frames_queue에 추가하는 함수.
+    비디오 파일에서 프레임을 읽어 frames_dict에 추가하는 함수.
 
     Args:
         file_path (str): 비디오 파일 경로.
-        frames_queue (list): 읽은 비디오 프레임을 저장할 리스트.
+        frames_dict (dict): 읽은 비디오 프레임을 저장할 딕셔너리.
         stop_event (threading.Event): 스레드 종료를 알리는 이벤트.
     """
     cap = cv2.VideoCapture(file_path)
@@ -32,31 +32,43 @@ def video_reader(file_path, frames_queue, stop_event):
         if not ret:
             break
 
-        frames_queue.append((file_path, frame))
+        frames_dict[file_path].append(frame)
 
     cap.release()
+
+
+def draw_rectangle(frame, person):
+    """
+    프레임에 사각형을 그리는 함수.
+
+    Args:
+        frame: 사각형을 그릴 프레임.
+        person: 사각형을 그릴 사람의 좌표 정보.
+    """
+    x1, y1, x2, y2 = map(int, person)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
 
 def main():
     """
     비디오 파일을 처리하고, 객체 추적을 수행하며, 여러 비디오에서 동일 인물을 식별하는 메인 함수.
     """
-    frames_queue = []
+    frames_dict = {file_path: [] for file_path in config.VIDEO_FILES}
     stop_event = threading.Event()
 
     # 각 비디오 파일에 대한 스레드 생성 및 시작
     threads = []
     for i, file_path in enumerate(config.VIDEO_FILES):
-        t = threading.Thread(target=video_reader, args=(file_path, frames_queue, stop_event))
+        t = threading.Thread(target=video_reader, args=(file_path, frames_dict, stop_event))
         threads.append(t)
         t.start()
 
     prev_matched_indices = [[] for _ in range(len(config.VIDEO_FILES))]  # 이전 프레임의 매칭 결과 저장
 
     while True:
-        if len(frames_queue) >= len(config.VIDEO_FILES):
-            # frames_queue에서 프레임 추출
-            frames = [frame for _, frame in frames_queue[:len(config.VIDEO_FILES)]]
+        if all(len(frames) > 0 for frames in frames_dict.values()):
+            # frames_dict에서 프레임 추출
+            frames = [frames_dict[file_path].pop(0) for file_path in config.VIDEO_FILES]
 
             # YOLOv8을 사용하여 각 프레임에 대해 객체 탐지 수행
             track_results = [model(frame) for frame in frames]
@@ -108,34 +120,38 @@ def main():
             for i, result in enumerate(track_results):
                 frame = result[0].orig_img
                 for j, match_idx in enumerate(matched_indices[i]):
-                    if 0 <= match_idx < len(features_list[0]):
-                        person1 = track_results[0][0].boxes.xyxy[j].tolist()
-                        person2 = result[0].boxes.xyxy[match_idx].tolist()
+                    if 0 <= match_idx < len(padded_features_list[0]):
+                        person = result[0].boxes.xyxy[j].tolist()
+                        draw_rectangle(frame, person)
 
-                        x1, y1, x2, y2 = map(int, person1)
-                        cv2.rectangle(track_results[0][0].orig_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                        if i > 0:
+                            person_prev = track_results[0][0].boxes.xyxy[match_idx].tolist()
+                            draw_rectangle(track_results[0][0].orig_img, person_prev)
 
-                        x1, y1, x2, y2 = map(int, person2)
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                            # 이전 프레임에서 매칭되었던 인덱스와 현재 프레임의 매칭 인덱스가 다른 경우, 선 그리기
+                            if len(prev_matched_indices[i]) > j and prev_matched_indices[i][j] != match_idx:
+                                prev_person = track_results[i - 1][0].boxes.xyxy[prev_matched_indices[i][j]].tolist()
+                                curr_person = person
 
-                        # 이전 프레임에서 매칭되었던 인덱스와 현재 프레임의 매칭 인덱스가 다른 경우, 선 그리기
-                        if i > 0 and j < len(prev_matched_indices[i]) and prev_matched_indices[i][j] != match_idx:
-                            prev_person = track_results[i - 1][0].boxes.xyxy[prev_matched_indices[i][j]].tolist()
-                            curr_person = person2
+                                prev_x, prev_y = (prev_person[0] + prev_person[2]) / 2, (
+                                        prev_person[1] + prev_person[3]) / 2
+                                curr_x, curr_y = (curr_person[0] + curr_person[2]) / 2, (
+                                        curr_person[1] + curr_person[3]) / 2
 
-                            prev_x, prev_y = (prev_person[0] + prev_person[2]) / 2, (
-                                    prev_person[1] + prev_person[3]) / 2
-                            curr_x, curr_y = (curr_person[0] + curr_person[2]) / 2, (
-                                    curr_person[1] + curr_person[3]) / 2
-
-                            cv2.line(frame, (int(prev_x), int(prev_y)), (int(curr_x), int(curr_y)), (0, 0, 255), 2)
+                                cv2.line(frame, (int(prev_x), int(prev_y)), (int(curr_x), int(curr_y)), (0, 0, 255), 2)
 
                 cv2.imshow(f'Video {i + 1}', frame)
 
-            prev_matched_indices = matched_indices  # 현재 프레임의 매칭 결과를 이전 프레임 매칭 결과로 업데이트
+            # video1에 시각화(사각형) 그리기
+            for j, match_idx in enumerate(matched_indices[0]):
+                if 0 <= match_idx < len(padded_features_list[0]):
+                    person = track_results[0][0].boxes.xyxy[j].tolist()
+                    draw_rectangle(track_results[0][0].orig_img, person)
 
-            # 처리된 프레임을 frames_queue에서 제거
-            frames_queue = frames_queue[len(config.VIDEO_FILES):]
+            cv2.imshow('Video 1', track_results[0][0].orig_img)
+
+            if len(matched_indices) > 0:
+                prev_matched_indices = matched_indices  # 현재 프레임의 매칭 결과를 이전 프레임 매칭 결과로 업데이트
 
         # 'q' 키 입력 시 프로그램 종료
         if cv2.waitKey(1) & 0xFF == ord('q'):
