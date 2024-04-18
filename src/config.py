@@ -7,3 +7,9 @@ VIDEO_FILES = [
 
 # YOLOv8 모델 경로
 YOLO_MODEL_PATH = 'yolov8n.pt'
+
+# 프레임 크기
+FRAME_SIZE = {
+    "w": 640,
+    "h": 360
+}

@@ -37,22 +37,198 @@ def video_reader(file_path, frames_dict, stop_event):
     cap.release()
 
 
-def draw_rectangle(frame, person):
+def calculate_similarity(feat1, feat2, size1, size2):
     """
-    프레임에 사각형을 그리는 함수.
+    두 특징 벡터 간의 유사도를 계산하는 함수.
+
+    Args:
+        feat1: 첫 번째 특징 벡터.
+        feat2: 두 번째 특징 벡터.
+        size1: 첫 번째 사람의 크기 (면적).
+        size2: 두 번째 사람의 크기 (면적).
+
+    Returns:
+        유사도 점수.
+    """
+    # 코사인 유사도 계산
+    cos_sim = np.dot(feat1, feat2.T) / (np.linalg.norm(feat1) * np.linalg.norm(feat2))
+    cos_sim = cos_sim.item()  # 스칼라 값으로 변환
+
+    # 크기 유사도 계산
+    size_sim = 1 - abs(size1 - size2) / max(size1, size2)
+
+    # 유사도 점수 조합
+    similarity = 0.7 * cos_sim + 0.3 * size_sim
+
+    return similarity
+
+
+def draw_rectangle(frame, person, color, object_id):
+    """
+    프레임에 사각형과 객체 번호를 그리는 함수.
 
     Args:
         frame: 사각형을 그릴 프레임.
         person: 사각형을 그릴 사람의 좌표 정보.
+        color: 사각형의 색상.
+        object_id: 객체의 번호.
     """
     x1, y1, x2, y2 = map(int, person)
-    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+    cv2.putText(frame, str(object_id), (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+
+
+def get_scale(frame_width, frame_height, orig_shape):
+    """
+    프레임 크기와 원본 이미지 크기를 기반으로 스케일 비율을 계산하는 함수.
+
+    Args:
+        frame_width: 프레임의 너비.
+        frame_height: 프레임의 높이.
+        orig_shape: 원본 이미지의 크기 (높이, 너비) 튜플.
+
+    Returns:
+        (scale_x, scale_y): 너비와 높이에 대한 스케일 비율 튜플.
+    """
+    scale_x = frame_width / orig_shape[1]
+    scale_y = frame_height / orig_shape[0]
+    return scale_x, scale_y
+
+
+def extract_features(track_results):
+    """
+    탐지된 결과에서 각 사람에 대한 외관 특징을 추출하는 함수.
+
+    Args:
+        track_results: YOLOv8 모델의 탐지 결과.
+
+    Returns:
+        features_list: 각 프레임별 사람들의 외관 특징 리스트.
+        sizes_list: 각 프레임별 사람들의 크기 리스트.
+        max_feature_length: 가장 긴 특징 벡터의 길이.
+    """
+    features_list = []
+    sizes_list = []
+    max_feature_length = 0
+
+    for result in track_results:
+        features = []
+        sizes = []
+        for r in result:
+            persons = [detection for detection in r.boxes.data.tolist() if detection[-1] == 0]
+            person_features = []
+            person_sizes = []
+            for person in persons:
+                x1, y1, x2, y2 = map(int, person[:4])
+                person_img = r.orig_img[y1:y2, x1:x2]
+                person_result = model(person_img)
+                feature = person_result[0].boxes.conf.tolist()
+                person_features.extend(feature)
+                person_sizes.append((x2 - x1) * (y2 - y1))
+            features.append(person_features)
+            sizes.append(max(person_sizes) if person_sizes else 0)
+            max_feature_length = max(max_feature_length, len(person_features))
+
+        features_list.append(features)
+        sizes_list.append(sizes)
+
+    return features_list, sizes_list, max_feature_length
+
+
+def match_persons(padded_features_list, sizes_list):
+    """
+    외관 특징을 기반으로 프레임 간 사람을 매칭하는 함수.
+
+    Args:
+        padded_features_list: 패딩된 외관 특징 리스트.
+        sizes_list: 각 프레임별 사람들의 크기 리스트.
+
+    Returns:
+        matched_indices: 매칭된 인덱스 정보.
+    """
+    num_frames = len(padded_features_list)
+    matched_indices = [[[] for _ in range(num_frames)] for _ in range(num_frames)]
+
+    for i in range(num_frames):
+        for j in range(i + 1, num_frames):
+            if len(padded_features_list[i]) > 0 and len(padded_features_list[j]) > 0:
+                cos_sim = np.zeros((len(padded_features_list[i]), len(padded_features_list[j])))
+                for k in range(len(padded_features_list[i])):
+                    for m in range(len(padded_features_list[j])):
+                        feat1 = np.array(padded_features_list[i][k]).reshape(1, -1)
+                        feat2 = np.array(padded_features_list[j][m]).reshape(1, -1)
+                        size1 = sizes_list[i][k]
+                        size2 = sizes_list[j][m]
+                        cos_sim[k, m] = calculate_similarity(feat1, feat2, size1, size2)
+                indices = np.argmax(cos_sim, axis=1)
+                matched_indices[i][j] = indices.tolist()
+                matched_indices[j][i] = [np.argmax(cos_sim, axis=0)[x] for x in indices]
+            else:
+                matched_indices[i][j] = []
+                matched_indices[j][i] = []
+
+    return matched_indices
+
+
+def visualize_results(track_results, matched_indices):
+    """
+    매칭 결과를 프레임에 시각화하는 함수.
+
+    Args:
+        track_results: YOLOv8 모델의 탐지 결과.
+        matched_indices: 매칭된 인덱스 정보.
+    """
+    frame_width = config.FRAME_SIZE["w"]
+    frame_height = config.FRAME_SIZE["h"]
+
+    colors = [(0, 255, 0), (255, 0, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255), (0, 255, 255)]
+
+    for i in range(len(track_results)):
+        frame = cv2.resize(track_results[i][0].orig_img, (frame_width, frame_height))
+        persons = track_results[i][0].boxes.data.tolist()
+
+        for j, person in enumerate(persons):
+            scale_x, scale_y = get_scale(frame_width, frame_height, track_results[i][0].orig_img.shape)
+            person_coords = [person[0] * scale_x, person[1] * scale_y, person[2] * scale_x, person[3] * scale_y]
+            color = colors[j % len(colors)]
+            draw_rectangle(frame, person_coords, color, j + 1)
+
+            for k in range(i + 1, len(track_results)):
+                if j < len(matched_indices[i][k]):
+                    match_idx = matched_indices[i][k][j]
+                    if match_idx < len(persons):
+                        match_person = persons[match_idx]
+                        scale_x_match, scale_y_match = get_scale(frame_width, frame_height,
+                                                                 track_results[k][0].orig_img.shape)
+                        match_coords = [match_person[0] * scale_x_match, match_person[1] * scale_y_match,
+                                        match_person[2] * scale_x_match, match_person[3] * scale_y_match]
+                        curr_x, curr_y = (person_coords[0] + person_coords[2]) / 2, (
+                                person_coords[1] + person_coords[3]) / 2
+                        match_x, match_y = (match_coords[0] + match_coords[2]) / 2, (
+                                match_coords[1] + match_coords[3]) / 2
+                        cv2.line(frame, (int(curr_x), int(curr_y)), (int(match_x), int(match_y)), color, 2)
+
+        cv2.imshow(f'Video {i + 1}', frame)
+
+
+def print_matching_info(matched_indices):
+    """
+    매칭 정보를 출력하는 함수.
+
+    Args:
+        matched_indices: 매칭된 인덱스 정보.
+    """
+    num_frames = len(matched_indices)
+
+    for i in range(num_frames):
+        for j in range(i + 1, num_frames):
+            for k, match_idx in enumerate(matched_indices[i][j]):
+                print(f"프레임 {i + 1}의 {k + 1}번째 사람은 프레임 {j + 1}의 {match_idx + 1}번째 사람과 동일")
+
+    print("---")
 
 
 def main():
-    """
-    비디오 파일을 처리하고, 객체 추적을 수행하며, 여러 비디오에서 동일 인물을 식별하는 메인 함수.
-    """
     frames_dict = {file_path: [] for file_path in config.VIDEO_FILES}
     stop_event = threading.Event()
 
@@ -63,33 +239,16 @@ def main():
         threads.append(t)
         t.start()
 
-    prev_matched_indices = [[] for _ in range(len(config.VIDEO_FILES))]  # 이전 프레임의 매칭 결과 저장
-
     while True:
         if all(len(frames) > 0 for frames in frames_dict.values()):
             # frames_dict에서 프레임 추출
             frames = [frames_dict[file_path].pop(0) for file_path in config.VIDEO_FILES]
 
             # YOLOv8을 사용하여 각 프레임에 대해 객체 탐지 수행
-            track_results = [model(frame) for frame in frames]
+            track_results = [model(frame, device=0, classes=0, conf=0.6) for frame in frames]
 
             # 탐지된 결과에서 각 사람에 대한 외관 특징 추출
-            features_list = []
-            max_feature_length = 0
-            for result in track_results:
-                features = []
-                for r in result:
-                    persons = [detection for detection in r.boxes.data.tolist() if detection[-1] == 0]
-                    person_features = []
-                    for person in persons:
-                        x1, y1, x2, y2 = map(int, person[:4])
-                        person_img = r.orig_img[y1:y2, x1:x2]
-                        person_result = model(person_img)
-                        feature = person_result[0].boxes.conf.tolist()  # 예측 결과의 신뢰도를 특징으로 사용
-                        person_features.extend(feature)  # 특징 벡터를 1차원으로 펼침
-                    features.append(person_features)
-                    max_feature_length = max(max_feature_length, len(person_features))
-                features_list.append(features)
+            features_list, sizes_list, max_feature_length = extract_features(track_results)
 
             # 특징 벡터의 차원을 통일
             padded_features_list = []
@@ -101,57 +260,13 @@ def main():
                 padded_features_list.append(padded_features)
 
             # 외관 특징을 기반으로 프레임 간 사람 매칭
-            matched_indices = [[] for _ in range(len(config.VIDEO_FILES))]  # 현재 프레임의 매칭 결과 저장
-            for i in range(1, len(padded_features_list)):
-                if len(padded_features_list[0]) > 0 and len(padded_features_list[i]) > 0:
-                    cos_sim = np.zeros((len(padded_features_list[0]), len(padded_features_list[i])))
-                    for j in range(len(padded_features_list[0])):
-                        for k in range(len(padded_features_list[i])):
-                            feat1 = np.array(padded_features_list[0][j]).reshape(1, -1)
-                            feat2 = np.array(padded_features_list[i][k]).reshape(1, -1)
-                            cos_sim[j, k] = np.dot(feat1, feat2.T) / (
-                                    np.linalg.norm(feat1, axis=1) * np.linalg.norm(feat2, axis=1))
-                    indices = np.argmax(cos_sim, axis=1)
-                    matched_indices[i] = indices.tolist()
-                else:
-                    matched_indices[i] = []
+            matched_indices = match_persons(padded_features_list, sizes_list)
+
+            # 매칭 정보 출력
+            # print_matching_info(matched_indices)
 
             # 매칭 결과를 프레임에 시각화
-            for i, result in enumerate(track_results):
-                frame = result[0].orig_img
-                for j, match_idx in enumerate(matched_indices[i]):
-                    if 0 <= match_idx < len(padded_features_list[0]):
-                        person = result[0].boxes.xyxy[j].tolist()
-                        draw_rectangle(frame, person)
-
-                        if i > 0:
-                            person_prev = track_results[0][0].boxes.xyxy[match_idx].tolist()
-                            draw_rectangle(track_results[0][0].orig_img, person_prev)
-
-                            # 이전 프레임에서 매칭되었던 인덱스와 현재 프레임의 매칭 인덱스가 다른 경우, 선 그리기
-                            if len(prev_matched_indices[i]) > j and prev_matched_indices[i][j] != match_idx:
-                                prev_person = track_results[i - 1][0].boxes.xyxy[prev_matched_indices[i][j]].tolist()
-                                curr_person = person
-
-                                prev_x, prev_y = (prev_person[0] + prev_person[2]) / 2, (
-                                        prev_person[1] + prev_person[3]) / 2
-                                curr_x, curr_y = (curr_person[0] + curr_person[2]) / 2, (
-                                        curr_person[1] + curr_person[3]) / 2
-
-                                cv2.line(frame, (int(prev_x), int(prev_y)), (int(curr_x), int(curr_y)), (0, 0, 255), 2)
-
-                cv2.imshow(f'Video {i + 1}', frame)
-
-            # video1에 시각화(사각형) 그리기
-            for j, match_idx in enumerate(matched_indices[0]):
-                if 0 <= match_idx < len(padded_features_list[0]):
-                    person = track_results[0][0].boxes.xyxy[j].tolist()
-                    draw_rectangle(track_results[0][0].orig_img, person)
-
-            cv2.imshow('Video 1', track_results[0][0].orig_img)
-
-            if len(matched_indices) > 0:
-                prev_matched_indices = matched_indices  # 현재 프레임의 매칭 결과를 이전 프레임 매칭 결과로 업데이트
+            visualize_results(track_results, matched_indices)
 
         # 'q' 키 입력 시 프로그램 종료
         if cv2.waitKey(1) & 0xFF == ord('q'):
