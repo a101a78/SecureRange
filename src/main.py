@@ -22,7 +22,7 @@ def video_reader(file_path, frames_dict, stop_event):
     cap = cv2.VideoCapture(file_path)
 
     if not cap.isOpened():
-        print(f"Error opening video file: {file_path}")
+        print(f'Error opening video file: {file_path}')
         stop_event.set()
         return
 
@@ -55,7 +55,7 @@ def calculate_similarity(feat1, feat2, size1, size2):
     cos_sim = cos_sim.item()  # 스칼라 값으로 변환
 
     # 크기 유사도 계산
-    size_sim = 1 - abs(size1 - size2) / max(size1, size2)
+    size_sim = 1 - np.abs(size1 - size2) / np.maximum(size1, size2)
 
     # 유사도 점수 조합
     similarity = 0.7 * cos_sim + 0.3 * size_sim
@@ -90,8 +90,9 @@ def get_scale(frame_width, frame_height, orig_shape):
     Returns:
         (scale_x, scale_y): 너비와 높이에 대한 스케일 비율 튜플.
     """
-    scale_x = frame_width / orig_shape[1]
-    scale_y = frame_height / orig_shape[0]
+    orig_height, orig_width = orig_shape[:2]
+    scale_x = frame_width / orig_width
+    scale_y = frame_height / orig_height
     return scale_x, scale_y
 
 
@@ -154,8 +155,10 @@ def match_persons(padded_features_list, sizes_list):
             if len(padded_features_list[i]) > 0 and len(padded_features_list[j]) > 0:
                 cos_sim = np.zeros((len(padded_features_list[i]), len(padded_features_list[j])))
                 for k in range(len(padded_features_list[i])):
+                    feat1 = np.array(padded_features_list[i][k]).reshape(1, -1)
                     for m in range(len(padded_features_list[j])):
-                        feat1 = np.array(padded_features_list[i][k]).reshape(1, -1)
+                        if matched_indices[j][i]:
+                            continue
                         feat2 = np.array(padded_features_list[j][m]).reshape(1, -1)
                         size1 = sizes_list[i][k]
                         size2 = sizes_list[j][m]
@@ -178,8 +181,8 @@ def visualize_results(track_results, matched_indices):
         track_results: YOLOv8 모델의 탐지 결과.
         matched_indices: 매칭된 인덱스 정보.
     """
-    frame_width = config.FRAME_SIZE["w"]
-    frame_height = config.FRAME_SIZE["h"]
+    frame_width = config.FRAME_SIZE['w']
+    frame_height = config.FRAME_SIZE['h']
 
     colors = [(0, 255, 0), (255, 0, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255), (0, 255, 255)]
 
@@ -223,9 +226,9 @@ def print_matching_info(matched_indices):
     for i in range(num_frames):
         for j in range(i + 1, num_frames):
             for k, match_idx in enumerate(matched_indices[i][j]):
-                print(f"프레임 {i + 1}의 {k + 1}번째 사람은 프레임 {j + 1}의 {match_idx + 1}번째 사람과 동일")
+                print(f'프레임 {i + 1}의 {k + 1}번째 사람은 프레임 {j + 1}의 {match_idx + 1}번째 사람과 동일')
 
-    print("---")
+    print('---')
 
 
 def main():
@@ -280,5 +283,5 @@ def main():
     cv2.destroyAllWindows()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
