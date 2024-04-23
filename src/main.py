@@ -12,12 +12,12 @@ model = YOLO(config.YOLO_MODEL_PATH)
 
 def video_reader(file_path, frames_dict, stop_event):
     """
-    비디오 파일에서 프레임을 읽어 frames_dict에 추가하는 함수.
+    비디오 파일에서 프레임을 읽어 frames_dict에 추가합니다.
 
     Args:
-        file_path (str): 비디오 파일 경로.
+        file_path (str): 비디오 파일의 경로.
         frames_dict (dict): 읽은 비디오 프레임을 저장할 딕셔너리.
-        stop_event (threading.Event): 스레드 종료를 알리는 이벤트.
+        stop_event (threading.Event): 스레드 종료 이벤트.
     """
     cap = cv2.VideoCapture(file_path)
 
@@ -39,7 +39,7 @@ def video_reader(file_path, frames_dict, stop_event):
 
 def calculate_similarity(feat1, feat2, size1, size2):
     """
-    두 특징 벡터 간의 유사도를 계산하는 함수.
+    두 특징 벡터 간의 유사도를 계산합니다.
 
     Args:
         feat1: 첫 번째 특징 벡터.
@@ -48,7 +48,7 @@ def calculate_similarity(feat1, feat2, size1, size2):
         size2: 두 번째 사람의 크기 (면적).
 
     Returns:
-        유사도 점수.
+        float: 유사도 점수.
     """
     # 코사인 유사도 계산
     cos_sim = np.dot(feat1, feat2.T) / (np.linalg.norm(feat1) * np.linalg.norm(feat2))
@@ -65,7 +65,7 @@ def calculate_similarity(feat1, feat2, size1, size2):
 
 def draw_rectangle(frame, person, color, object_id):
     """
-    프레임에 사각형과 객체 번호를 그리는 함수.
+    프레임에 사각형과 객체 번호를 그립니다.
 
     Args:
         frame: 사각형을 그릴 프레임.
@@ -80,15 +80,15 @@ def draw_rectangle(frame, person, color, object_id):
 
 def get_scale(frame_width, frame_height, orig_shape):
     """
-    프레임 크기와 원본 이미지 크기를 기반으로 스케일 비율을 계산하는 함수.
+    프레임 크기와 원본 이미지 크기를 기반으로 스케일 비율을 계산합니다.
 
     Args:
-        frame_width: 프레임의 너비.
-        frame_height: 프레임의 높이.
-        orig_shape: 원본 이미지의 크기 (높이, 너비) 튜플.
+        frame_width (int): 프레임의 너비.
+        frame_height (int): 프레임의 높이.
+        orig_shape (tuple): 원본 이미지의 크기 (높이, 너비).
 
     Returns:
-        (scale_x, scale_y): 너비와 높이에 대한 스케일 비율 튜플.
+        tuple: 너비와 높이에 대한 스케일 비율 (scale_x, scale_y).
     """
     orig_height, orig_width = orig_shape[:2]
     scale_x = frame_width / orig_width
@@ -98,15 +98,16 @@ def get_scale(frame_width, frame_height, orig_shape):
 
 def extract_features(track_results):
     """
-    탐지된 결과에서 각 사람에 대한 외관 특징을 추출하는 함수.
+    탐지된 결과에서 각 사람에 대한 외관 특징을 추출합니다.
 
     Args:
-        track_results: YOLOv8 모델의 탐지 결과.
+        track_results (list): YOLOv8 모델의 탐지 결과.
 
     Returns:
-        features_list: 각 프레임별 사람들의 외관 특징 리스트.
-        sizes_list: 각 프레임별 사람들의 크기 리스트.
-        max_feature_length: 가장 긴 특징 벡터의 길이.
+        tuple: (features_list, sizes_list, max_feature_length)
+            - features_list (list): 각 프레임별 사람들의 외관 특징 리스트.
+            - sizes_list (list): 각 프레임별 사람들의 크기 리스트.
+            - max_feature_length (int): 가장 긴 특징 벡터의 길이.
     """
     features_list = []
     sizes_list = []
@@ -138,14 +139,14 @@ def extract_features(track_results):
 
 def match_persons(padded_features_list, sizes_list):
     """
-    외관 특징을 기반으로 프레임 간 사람을 매칭하는 함수.
+    외관 특징을 기반으로 프레임 간 사람을 매칭합니다.
 
     Args:
-        padded_features_list: 패딩된 외관 특징 리스트.
-        sizes_list: 각 프레임별 사람들의 크기 리스트.
+        padded_features_list (list): 패딩된 외관 특징 리스트.
+        sizes_list (list): 각 프레임별 사람들의 크기 리스트.
 
     Returns:
-        matched_indices: 매칭된 인덱스 정보.
+        list: 매칭된 인덱스 정보.
     """
     num_frames = len(padded_features_list)
     matched_indices = [[[] for _ in range(num_frames)] for _ in range(num_frames)]
@@ -175,11 +176,11 @@ def match_persons(padded_features_list, sizes_list):
 
 def visualize_results(track_results, matched_indices):
     """
-    매칭 결과를 프레임에 시각화하는 함수.
+    매칭 결과를 프레임에 시각화합니다.
 
     Args:
-        track_results: YOLOv8 모델의 탐지 결과.
-        matched_indices: 매칭된 인덱스 정보.
+        track_results (list): YOLOv8 모델의 탐지 결과.
+        matched_indices (list): 매칭된 인덱스 정보.
     """
     frame_width = config.FRAME_SIZE['w']
     frame_height = config.FRAME_SIZE['h']
@@ -216,10 +217,10 @@ def visualize_results(track_results, matched_indices):
 
 def print_matching_info(matched_indices):
     """
-    매칭 정보를 출력하는 함수.
+    매칭 정보를 출력합니다.
 
     Args:
-        matched_indices: 매칭된 인덱스 정보.
+        matched_indices (list): 매칭된 인덱스 정보.
     """
     num_frames = len(matched_indices)
 
