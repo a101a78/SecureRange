@@ -2,6 +2,7 @@ import threading
 
 import cv2
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 from ultralytics import YOLO
 
 import config
@@ -49,12 +50,19 @@ def calculate_similarity(feat1, feat2, size1, size2):
     Returns:
         float: Similarity score.
     """
+    epsilon = 1e-8  # Small value to avoid division by zero
+
     # Calculate cosine similarity
-    cos_sim = np.dot(feat1, feat2.T) / (np.linalg.norm(feat1) * np.linalg.norm(feat2))
-    cos_sim = cos_sim.item()  # Convert to scalar value
+    feat1_norm = np.linalg.norm(feat1)
+    feat2_norm = np.linalg.norm(feat2)
+    if feat1_norm == 0 or feat2_norm == 0:
+        cos_sim = 0.0
+    else:
+        cos_sim = np.dot(feat1, feat2.T) / (feat1_norm * feat2_norm)
+        cos_sim = cos_sim.item()  # Convert to scalar value
 
     # Calculate size similarity
-    size_sim = 1 - np.abs(size1 - size2) / np.maximum(size1, size2)
+    size_sim = 1 - np.abs(size1 - size2) / (np.maximum(size1, size2) + epsilon)
 
     # Combine similarity scores
     similarity = 0.7 * cos_sim + 0.3 * size_sim
@@ -138,7 +146,7 @@ def extract_features(track_results):
 
 def match_persons(padded_features_list, sizes_list):
     """
-    Match persons between frames based on appearance features.
+    Match persons between frames based on appearance features using the Hungarian algorithm.
 
     Args:
         padded_features_list (list): List of padded appearance features.
@@ -148,27 +156,21 @@ def match_persons(padded_features_list, sizes_list):
         list: Matched index information.
     """
     num_frames = len(padded_features_list)
-    matched_indices = [[[] for _ in range(num_frames)] for _ in range(num_frames)]
+    matched_indices = [[] for _ in range(num_frames)]
 
-    for i in range(num_frames):
-        for j in range(i + 1, num_frames):
-            if len(padded_features_list[i]) > 0 and len(padded_features_list[j]) > 0:
-                cos_sim = np.zeros((len(padded_features_list[i]), len(padded_features_list[j])))
-                for k in range(len(padded_features_list[i])):
-                    feat1 = np.array(padded_features_list[i][k]).reshape(1, -1)
-                    for m in range(len(padded_features_list[j])):
-                        if matched_indices[j][i]:
-                            continue
-                        feat2 = np.array(padded_features_list[j][m]).reshape(1, -1)
-                        size1 = sizes_list[i][k]
-                        size2 = sizes_list[j][m]
-                        cos_sim[k, m] = calculate_similarity(feat1, feat2, size1, size2)
-                indices = np.argmax(cos_sim, axis=1)
-                matched_indices[i][j] = indices.tolist()
-                matched_indices[j][i] = [np.argmax(cos_sim, axis=0)[x] for x in indices]
-            else:
-                matched_indices[i][j] = []
-                matched_indices[j][i] = []
+    for i in range(num_frames - 1):
+        cos_sim = np.zeros((len(padded_features_list[i]), len(padded_features_list[i + 1])))
+        for j in range(len(padded_features_list[i])):
+            feat1 = np.array(padded_features_list[i][j]).reshape(1, -1)
+            for k in range(len(padded_features_list[i + 1])):
+                feat2 = np.array(padded_features_list[i + 1][k]).reshape(1, -1)
+                size1 = sizes_list[i][j]
+                size2 = sizes_list[i + 1][k]
+                cos_sim[j, k] = calculate_similarity(feat1, feat2, size1, size2)
+
+        # Convert the similarity matrix to a minimum assignment problem by taking the negative
+        row_ind, col_ind = linear_sum_assignment(-cos_sim)
+        matched_indices[i] = col_ind.tolist()
 
     return matched_indices
 
@@ -196,20 +198,19 @@ def visualize_results(track_results, matched_indices):
             color = colors[j % len(colors)]
             draw_rectangle(frame, person_coords, color, j + 1)
 
-            for k in range(i + 1, len(track_results)):
-                if j < len(matched_indices[i][k]):
-                    match_idx = matched_indices[i][k][j]
-                    if match_idx < len(persons):
-                        match_person = persons[match_idx]
-                        scale_x_match, scale_y_match = get_scale(frame_width, frame_height,
-                                                                 track_results[k][0].orig_img.shape)
-                        match_coords = [match_person[0] * scale_x_match, match_person[1] * scale_y_match,
-                                        match_person[2] * scale_x_match, match_person[3] * scale_y_match]
-                        curr_x, curr_y = (person_coords[0] + person_coords[2]) / 2, (
-                                person_coords[1] + person_coords[3]) / 2
-                        match_x, match_y = (match_coords[0] + match_coords[2]) / 2, (
-                                match_coords[1] + match_coords[3]) / 2
-                        cv2.line(frame, (int(curr_x), int(curr_y)), (int(match_x), int(match_y)), color, 2)
+            if i < len(matched_indices) and j < len(matched_indices[i]):
+                match_idx = matched_indices[i][j]
+                if match_idx < len(persons):
+                    match_person = persons[match_idx]
+                    scale_x_match, scale_y_match = get_scale(frame_width, frame_height,
+                                                             track_results[i + 1][0].orig_img.shape)
+                    match_coords = [match_person[0] * scale_x_match, match_person[1] * scale_y_match,
+                                    match_person[2] * scale_x_match, match_person[3] * scale_y_match]
+                    curr_x, curr_y = (person_coords[0] + person_coords[2]) / 2, (
+                            person_coords[1] + person_coords[3]) / 2
+                    match_x, match_y = (match_coords[0] + match_coords[2]) / 2, (
+                            match_coords[1] + match_coords[3]) / 2
+                    cv2.line(frame, (int(curr_x), int(curr_y)), (int(match_x), int(match_y)), color, 2)
 
         cv2.imshow(f'Video {i + 1}', frame)
 
