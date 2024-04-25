@@ -156,32 +156,35 @@ def match_persons(padded_features_list, sizes_list):
         list: Matched index information.
     """
     num_frames = len(padded_features_list)
-    matched_indices = [[] for _ in range(num_frames)]
+    matched_indices = [[[] for _ in range(num_frames)] for _ in range(num_frames)]
 
-    for i in range(num_frames - 1):
-        cos_sim = np.zeros((len(padded_features_list[i]), len(padded_features_list[i + 1])))
-        for j in range(len(padded_features_list[i])):
-            feat1 = np.array(padded_features_list[i][j]).reshape(1, -1)
-            for k in range(len(padded_features_list[i + 1])):
-                feat2 = np.array(padded_features_list[i + 1][k]).reshape(1, -1)
-                size1 = sizes_list[i][j]
-                size2 = sizes_list[i + 1][k]
-                cos_sim[j, k] = calculate_similarity(feat1, feat2, size1, size2)
+    for i in range(num_frames):
+        for j in range(i + 1, num_frames):
+            cos_sim = np.zeros((len(padded_features_list[i]), len(padded_features_list[j])))
+            for k in range(len(padded_features_list[i])):
+                feat1 = np.array(padded_features_list[i][k]).reshape(1, -1)
+                for L in range(len(padded_features_list[j])):
+                    feat2 = np.array(padded_features_list[j][L]).reshape(1, -1)
+                    size1 = sizes_list[i][k]
+                    size2 = sizes_list[j][L]
+                    cos_sim[k, L] = calculate_similarity(feat1, feat2, size1, size2)
 
-        # Convert the similarity matrix to a minimum assignment problem by taking the negative
-        row_ind, col_ind = linear_sum_assignment(-cos_sim)
-        matched_indices[i] = col_ind.tolist()
+            # Convert the similarity matrix to a minimum assignment problem by taking the negative
+            row_ind, col_ind = linear_sum_assignment(-cos_sim)
+            matched_indices[i][j] = col_ind.tolist()
+            matched_indices[j][i] = row_ind.tolist()
 
     return matched_indices
 
 
-def visualize_results(track_results, matched_indices):
+def visualize_results(track_results, matched_indices, base_frame_index):
     """
     Visualize the matching results on the frames.
 
     Args:
         track_results (list): Detection results from the YOLOv8 model.
         matched_indices (list): Matched index information.
+        base_frame_index (int): Index of the base frame.
     """
     frame_width = config.FRAME_SIZE['w']
     frame_height = config.FRAME_SIZE['h']
@@ -190,46 +193,29 @@ def visualize_results(track_results, matched_indices):
 
     for i in range(len(track_results)):
         frame = cv2.resize(track_results[i][0].orig_img, (frame_width, frame_height))
+
+        if i == base_frame_index:
+            cv2.circle(frame, (10, 10), 5, (0, 0, 255), -1)
+
         persons = track_results[i][0].boxes.data.tolist()
 
         for j, person in enumerate(persons):
             scale_x, scale_y = get_scale(frame_width, frame_height, track_results[i][0].orig_img.shape)
             person_coords = [person[0] * scale_x, person[1] * scale_y, person[2] * scale_x, person[3] * scale_y]
-            color = colors[j % len(colors)]
+
+            if i == base_frame_index:
+                color = colors[j % len(colors)]
+            else:
+                base_match_indices = matched_indices[base_frame_index][i]
+                if j < len(base_match_indices):
+                    base_match_idx = base_match_indices[j]
+                    color = colors[base_match_idx % len(colors)]
+                else:
+                    color = (255, 255, 255)  # 매칭되지 않은 사람은 흰색으로 표시
+
             draw_rectangle(frame, person_coords, color, j + 1)
 
-            if i < len(matched_indices) and j < len(matched_indices[i]):
-                match_idx = matched_indices[i][j]
-                if match_idx < len(persons):
-                    match_person = persons[match_idx]
-                    scale_x_match, scale_y_match = get_scale(frame_width, frame_height,
-                                                             track_results[i + 1][0].orig_img.shape)
-                    match_coords = [match_person[0] * scale_x_match, match_person[1] * scale_y_match,
-                                    match_person[2] * scale_x_match, match_person[3] * scale_y_match]
-                    curr_x, curr_y = (person_coords[0] + person_coords[2]) / 2, (
-                            person_coords[1] + person_coords[3]) / 2
-                    match_x, match_y = (match_coords[0] + match_coords[2]) / 2, (
-                            match_coords[1] + match_coords[3]) / 2
-                    cv2.line(frame, (int(curr_x), int(curr_y)), (int(match_x), int(match_y)), color, 2)
-
         cv2.imshow(f'Video {i + 1}', frame)
-
-
-def print_matching_info(matched_indices):
-    """
-    Print the matching information.
-
-    Args:
-        matched_indices (list): Matched index information.
-    """
-    num_frames = len(matched_indices)
-
-    for i in range(num_frames):
-        for j in range(i + 1, num_frames):
-            for k, match_idx in enumerate(matched_indices[i][j]):
-                print(f'Person {k + 1} in frame {i + 1} is the same as person {match_idx + 1} in frame {j + 1}')
-
-    print('---')
 
 
 def main():
@@ -268,8 +254,12 @@ def main():
                 # Match persons between frames based on appearance features
                 matched_indices = match_persons(padded_features_list, sizes_list)
 
+                # Find the frame with the most detected people
+                num_people_per_frame = [len(features) for features in features_list]
+                base_frame_index = num_people_per_frame.index(max(num_people_per_frame))
+
                 # Visualize the matching results on the frames
-                visualize_results(track_results, matched_indices)
+                visualize_results(track_results, matched_indices, base_frame_index)
 
             frame_count += 1
 
