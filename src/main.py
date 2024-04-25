@@ -242,34 +242,35 @@ def main():
         threads.append(t)
         t.start()
 
+    frame_count = 0
     while True:
         if all(len(frames) > 0 for frames in frames_dict.values()):
             # Extract frames from frames_dict
             frames = [frames_dict[file_path].pop(0) for file_path in config.VIDEO_FILES]
 
-            # Perform object detection using YOLOv8 for each frame
-            track_results = [model(frame, device=0, classes=0, conf=0.6) for frame in frames]
+            if frame_count % config.KEYFRAME_INTERVAL == 0:
+                # Perform object detection using YOLOv8 for each frame
+                track_results = [model(frame, device=0, classes=0, conf=0.6) for frame in frames]
 
-            # Extract appearance features for each person from the detected results
-            features_list, sizes_list, max_feature_length = extract_features(track_results)
+                # Extract appearance features for each person from the detected results
+                features_list, sizes_list, max_feature_length = extract_features(track_results)
 
-            # Unify the dimensions of the feature vectors
-            padded_features_list = []
-            for features in features_list:
-                padded_features = []
-                for feature in features:
-                    padded_feature = feature + [0] * (max_feature_length - len(feature))
-                    padded_features.append(padded_feature)
-                padded_features_list.append(padded_features)
+                # Unify the dimensions of the feature vectors
+                padded_features_list = []
+                for features in features_list:
+                    padded_features = []
+                    for feature in features:
+                        padded_feature = feature + [0] * (max_feature_length - len(feature))
+                        padded_features.append(padded_feature)
+                    padded_features_list.append(padded_features)
 
-            # Match persons between frames based on appearance features
-            matched_indices = match_persons(padded_features_list, sizes_list)
+                # Match persons between frames based on appearance features
+                matched_indices = match_persons(padded_features_list, sizes_list)
 
-            # Print the matching information
-            # print_matching_info(matched_indices)
+                # Visualize the matching results on the frames
+                visualize_results(track_results, matched_indices)
 
-            # Visualize the matching results on the frames
-            visualize_results(track_results, matched_indices)
+            frame_count += 1
 
         # Press 'q' to quit the program
         if cv2.waitKey(1) & 0xFF == ord('q'):

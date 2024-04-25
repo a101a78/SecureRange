@@ -8,6 +8,9 @@ VIDEO_FILES = [
 # YOLOv8 모델 경로
 YOLO_MODEL_PATH = 'yolov8x.pt'
 
+# 특징 추출 간격
+KEYFRAME_INTERVAL = 10
+
 # 프레임 크기
 FRAME_SIZE = {
     'w': 640,
