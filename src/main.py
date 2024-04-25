@@ -13,7 +13,6 @@ model = YOLO(config.YOLO_MODEL_PATH)
 def video_reader(file_path, frames_dict, stop_event):
     """
     Read frames from a video file and add them to frames_dict.
-
     Args:
         file_path (str): Path to the video file.
         frames_dict (dict): Dictionary to store the read video frames.
@@ -40,7 +39,6 @@ def video_reader(file_path, frames_dict, stop_event):
 def calculate_similarity(feat1, feat2, size1, size2, color_hist1, color_hist2):
     """
     Calculate the similarity between two feature vectors.
-
     Args:
         feat1: First feature vector.
         feat2: Second feature vector.
@@ -48,7 +46,6 @@ def calculate_similarity(feat1, feat2, size1, size2, color_hist1, color_hist2):
         size2: Size (area) of the second person.
         color_hist1: Color histogram of the first person.
         color_hist2: Color histogram of the second person.
-
     Returns:
         float: Similarity score.
     """
@@ -88,7 +85,6 @@ def calculate_similarity(feat1, feat2, size1, size2, color_hist1, color_hist2):
 def draw_rectangle(frame, person, color, object_id):
     """
     Draw a rectangle and object number on the frame.
-
     Args:
         frame: Frame to draw the rectangle on.
         person: Coordinate information of the person to draw the rectangle for.
@@ -103,12 +99,10 @@ def draw_rectangle(frame, person, color, object_id):
 def get_scale(frame_width, frame_height, orig_shape):
     """
     Calculate the scale ratios based on the frame size and original image size.
-
     Args:
         frame_width (int): Width of the frame.
         frame_height (int): Height of the frame.
         orig_shape (tuple): Size of the original image (height, width).
-
     Returns:
         tuple: Scale ratios for width and height (scale_x, scale_y).
     """
@@ -121,10 +115,8 @@ def get_scale(frame_width, frame_height, orig_shape):
 def extract_features(track_results):
     """
     Extract appearance features for each person from the detected results.
-
     Args:
         track_results (list): Detection results from the YOLOv8 model.
-
     Returns:
         tuple: (features_list, sizes_list, color_hists_list, max_feature_length)
             - features_list (list): List of appearance features for each person in each frame.
@@ -171,15 +163,14 @@ def extract_features(track_results):
     return features_list, sizes_list, color_hists_list, max_feature_length
 
 
-def match_persons(padded_features_list, sizes_list, color_hists_list):
+def match_persons(padded_features_list, sizes_list, color_hists_list, use_sort_ratio):
     """
     Match persons between frames based on appearance features using the Hungarian algorithm.
-
     Args:
         padded_features_list (list): List of padded appearance features.
         sizes_list (list): List of sizes for each person in each frame.
         color_hists_list (list): List of color histograms for each person in each frame.
-
+        use_sort_ratio (float): Ratio of frames to apply SORT algorithm instead of DeepSORT.
     Returns:
         list: Matched index information.
     """
@@ -188,32 +179,65 @@ def match_persons(padded_features_list, sizes_list, color_hists_list):
 
     for i in range(num_frames):
         for j in range(i + 1, num_frames):
-            cos_sim = np.zeros((len(padded_features_list[i]), len(padded_features_list[j])))
-            for k in range(len(padded_features_list[i])):
-                feat1 = np.array(padded_features_list[i][k]).reshape(1, -1)
-                for L in range(len(padded_features_list[j])):
-                    feat2 = np.array(padded_features_list[j][L]).reshape(1, -1)
-                    size1 = sizes_list[i][k]
-                    size2 = sizes_list[j][L]
-                    if k < len(color_hists_list[i]) and L < len(color_hists_list[j]):
-                        color_hist1 = color_hists_list[i][k]
-                        color_hist2 = color_hists_list[j][L]
-                        cos_sim[k, L] = calculate_similarity(feat1, feat2, size1, size2, color_hist1, color_hist2)
-                    else:
-                        cos_sim[k, L] = calculate_similarity(feat1, feat2, size1, size2, None, None)
+            if np.random.rand() < use_sort_ratio:
+                # Apply SORT algorithm
+                iou_matrix = np.zeros((len(padded_features_list[i]), len(padded_features_list[j])))
+                for k in range(len(padded_features_list[i])):
+                    for L in range(len(padded_features_list[j])):
+                        iou_matrix[k, L] = calculate_iou(padded_features_list[i][k], padded_features_list[j][L])
+                row_ind, col_ind = linear_sum_assignment(-iou_matrix)
+            else:
+                # Apply DeepSORT algorithm
+                cos_sim = np.zeros((len(padded_features_list[i]), len(padded_features_list[j])))
+                for k in range(len(padded_features_list[i])):
+                    feat1 = np.array(padded_features_list[i][k]).reshape(1, -1)
+                    for L in range(len(padded_features_list[j])):
+                        feat2 = np.array(padded_features_list[j][L]).reshape(1, -1)
+                        size1 = sizes_list[i][k]
+                        size2 = sizes_list[j][L]
+                        if k < len(color_hists_list[i]) and L < len(color_hists_list[j]):
+                            color_hist1 = color_hists_list[i][k]
+                            color_hist2 = color_hists_list[j][L]
+                            cos_sim[k, L] = calculate_similarity(feat1, feat2, size1, size2, color_hist1, color_hist2)
+                        else:
+                            cos_sim[k, L] = calculate_similarity(feat1, feat2, size1, size2, None, None)
+                row_ind, col_ind = linear_sum_assignment(-cos_sim)
 
-            # Convert the similarity matrix to a minimum assignment problem by taking the negative
-            row_ind, col_ind = linear_sum_assignment(-cos_sim)
             matched_indices[i][j] = col_ind.tolist()
             matched_indices[j][i] = row_ind.tolist()
 
     return matched_indices
 
 
+def calculate_iou(bbox1, bbox2):
+    """
+    Calculate Intersection over Union (IoU) between two bounding boxes.
+    Args:
+        bbox1 (list): First bounding box coordinates [x1, y1, x2, y2].
+        bbox2 (list): Second bounding box coordinates [x1, y1, x2, y2].
+    Returns:
+        float: IoU value.
+    """
+    if len(bbox1) != 4 or len(bbox2) != 4:
+        return 0.0  # Return 0 if the bounding box coordinates are invalid
+
+    x1 = max(bbox1[0], bbox2[0])
+    y1 = max(bbox1[1], bbox2[1])
+    x2 = min(bbox1[2], bbox2[2])
+    y2 = min(bbox1[3], bbox2[3])
+
+    intersection_area = max(0, x2 - x1) * max(0, y2 - y1)
+    bbox1_area = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
+    bbox2_area = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
+    union_area = bbox1_area + bbox2_area - intersection_area
+
+    iou = intersection_area / (union_area + 1e-6)
+    return iou
+
+
 def visualize_results(track_results, matched_indices, base_frame_index):
     """
     Visualize the matching results on the frames.
-
     Args:
         track_results (list): Detection results from the YOLOv8 model.
         matched_indices (list): Matched index information.
@@ -263,6 +287,8 @@ def main():
         t.start()
 
     frame_count = 0
+    use_sort_ratio = config.USE_SORT_RATIO  # Ratio of frames to apply SORT algorithm
+
     while True:
         if all(len(frames) > 0 for frames in frames_dict.values()):
             # Extract frames from frames_dict
@@ -285,7 +311,7 @@ def main():
                     padded_features_list.append(padded_features)
 
                 # Match persons between frames based on appearance features
-                matched_indices = match_persons(padded_features_list, sizes_list, color_hists_list)
+                matched_indices = match_persons(padded_features_list, sizes_list, color_hists_list, use_sort_ratio)
 
                 # Find the frame with the most detected people
                 num_people_per_frame = [len(features) for features in features_list]
@@ -293,8 +319,7 @@ def main():
 
                 # Visualize the matching results on the frames
                 visualize_results(track_results, matched_indices, base_frame_index)
-
-            frame_count += 1
+        frame_count += 1
 
         # Press 'q' to quit the program
         if cv2.waitKey(1) & 0xFF == ord('q'):
