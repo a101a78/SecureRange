@@ -2,6 +2,7 @@ import threading
 
 import cv2
 import numpy as np
+from filterpy.kalman import KalmanFilter
 from scipy.optimize import linear_sum_assignment
 from ultralytics import YOLO
 
@@ -50,6 +51,11 @@ def calculate_similarity(feat1, feat2, size1, size2, color_hist1, color_hist2):
         float: Similarity score.
     """
     epsilon = 1e-8  # Small value to avoid division by zero
+
+    # Ensure feature vectors have the same length
+    max_length = max(feat1.shape[1], feat2.shape[1])
+    feat1 = np.pad(feat1, ((0, 0), (0, max_length - feat1.shape[1])), mode='constant')
+    feat2 = np.pad(feat2, ((0, 0), (0, max_length - feat2.shape[1])), mode='constant')
 
     # Calculate cosine similarity
     feat1_norm = np.linalg.norm(feat1)
@@ -118,16 +124,14 @@ def extract_features(track_results):
     Args:
         track_results (list): Detection results from the YOLOv8 model.
     Returns:
-        tuple: (features_list, sizes_list, color_hists_list, max_feature_length)
+        tuple: (features_list, sizes_list, color_hists_list)
             - features_list (list): List of appearance features for each person in each frame.
             - sizes_list (list): List of sizes for each person in each frame.
             - color_hists_list (list): List of color histograms for each person in each frame.
-            - max_feature_length (int): Length of the longest feature vector.
     """
     features_list = []
     sizes_list = []
     color_hists_list = []
-    max_feature_length = 0
 
     for result in track_results:
         features = []
@@ -135,64 +139,61 @@ def extract_features(track_results):
         color_hists = []
         for r in result:
             persons = [detection for detection in r.boxes.data.tolist() if detection[-1] == 0]
-            person_features = []
-            person_sizes = []
-            person_color_hists = []
             for person in persons:
                 x1, y1, x2, y2 = map(int, person[:4])
                 person_img = r.orig_img[y1:y2, x1:x2]
                 person_result = model(person_img)
                 feature = person_result[0].boxes.conf.tolist()
-                person_features.extend(feature)
-                person_sizes.append((x2 - x1) * (y2 - y1))
+                features.append(feature)
+                sizes.append((x2 - x1) * (y2 - y1))
 
                 # Calculate color histogram
                 color_hist = cv2.calcHist([person_img], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
                 color_hist = cv2.normalize(color_hist, color_hist).flatten()
-                person_color_hists.append(color_hist)
-
-            features.append(person_features)
-            sizes.append(max(person_sizes) if person_sizes else 0)
-            color_hists.append(person_color_hists)
-            max_feature_length = max(max_feature_length, len(person_features))
+                color_hists.append(color_hist)
 
         features_list.append(features)
         sizes_list.append(sizes)
         color_hists_list.append(color_hists)
 
-    return features_list, sizes_list, color_hists_list, max_feature_length
+    return features_list, sizes_list, color_hists_list
 
 
-def match_persons(padded_features_list, sizes_list, color_hists_list, use_sort_ratio):
+def match_persons(features_list, sizes_list, color_hists_list, use_sort_ratio, prev_frame_data):
     """
     Match persons between frames based on appearance features using the Hungarian algorithm.
     Args:
-        padded_features_list (list): List of padded appearance features.
+        features_list (list): List of appearance features.
         sizes_list (list): List of sizes for each person in each frame.
         color_hists_list (list): List of color histograms for each person in each frame.
         use_sort_ratio (float): Ratio of frames to apply SORT algorithm instead of DeepSORT.
+        prev_frame_data (dict): Data from the previous frame.
     Returns:
-        list: Matched index information.
+        tuple: (matched_indices, curr_frame_data)
+            - matched_indices (list): Matched index information.
+            - curr_frame_data (dict): Data for the current frame.
     """
-    num_frames = len(padded_features_list)
+    num_frames = len(features_list)
     matched_indices = [[[] for _ in range(num_frames)] for _ in range(num_frames)]
+    curr_frame_data = {}
 
     for i in range(num_frames):
+        curr_frame_data[i] = {}
         for j in range(i + 1, num_frames):
             if np.random.rand() < use_sort_ratio:
                 # Apply SORT algorithm
-                iou_matrix = np.zeros((len(padded_features_list[i]), len(padded_features_list[j])))
-                for k in range(len(padded_features_list[i])):
-                    for L in range(len(padded_features_list[j])):
-                        iou_matrix[k, L] = calculate_iou(padded_features_list[i][k], padded_features_list[j][L])
+                iou_matrix = np.zeros((len(features_list[i]), len(features_list[j])))
+                for k in range(len(features_list[i])):
+                    for L in range(len(features_list[j])):
+                        iou_matrix[k, L] = calculate_iou(features_list[i][k], features_list[j][L])
                 row_ind, col_ind = linear_sum_assignment(-iou_matrix)
             else:
                 # Apply DeepSORT algorithm
-                cos_sim = np.zeros((len(padded_features_list[i]), len(padded_features_list[j])))
-                for k in range(len(padded_features_list[i])):
-                    feat1 = np.array(padded_features_list[i][k]).reshape(1, -1)
-                    for L in range(len(padded_features_list[j])):
-                        feat2 = np.array(padded_features_list[j][L]).reshape(1, -1)
+                cos_sim = np.zeros((len(features_list[i]), len(features_list[j])))
+                for k in range(len(features_list[i])):
+                    feat1 = np.array(features_list[i][k]).reshape(1, -1)
+                    for L in range(len(features_list[j])):
+                        feat2 = np.array(features_list[j][L]).reshape(1, -1)
                         size1 = sizes_list[i][k]
                         size2 = sizes_list[j][L]
                         if k < len(color_hists_list[i]) and L < len(color_hists_list[j]):
@@ -206,7 +207,29 @@ def match_persons(padded_features_list, sizes_list, color_hists_list, use_sort_r
             matched_indices[i][j] = col_ind.tolist()
             matched_indices[j][i] = row_ind.tolist()
 
-    return matched_indices
+            # Update Kalman filter for matched objects
+            for k, L in zip(row_ind, col_ind):
+                feature_length = len(features_list[j][L])
+                if i in prev_frame_data and k in prev_frame_data[i]:
+                    kf = prev_frame_data[i][k]['kf']
+                    if kf.dim_x != feature_length:
+                        kf = KalmanFilter(dim_x=feature_length, dim_z=feature_length)
+                else:
+                    kf = KalmanFilter(dim_x=feature_length, dim_z=feature_length)
+
+                kf.F = np.eye(feature_length)
+                kf.H = np.eye(feature_length)
+                kf.R = np.eye(feature_length) * 10.0
+                kf.P = np.eye(feature_length) * 1000.0
+                kf.Q = np.eye(feature_length) * 0.01
+                measurement = np.array(features_list[j][L]).reshape(-1, 1)
+                print(f"Measurement shape: {measurement.shape}")
+                kf.predict()
+                kf.update(measurement)
+
+                curr_frame_data[i][k] = {'kf': kf}
+
+    return matched_indices, curr_frame_data
 
 
 def calculate_iou(bbox1, bbox2):
@@ -245,7 +268,6 @@ def visualize_results(track_results, matched_indices, base_frame_index):
     """
     frame_width = config.FRAME_SIZE['w']
     frame_height = config.FRAME_SIZE['h']
-
     colors = [(0, 255, 0), (255, 0, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255), (0, 255, 255)]
 
     for i in range(len(track_results)):
@@ -276,6 +298,9 @@ def visualize_results(track_results, matched_indices, base_frame_index):
 
 
 def main():
+    """
+    Main function to run the multi-object tracking program.
+    """
     frames_dict = {file_path: [] for file_path in config.VIDEO_FILES}
     stop_event = threading.Event()
 
@@ -288,6 +313,7 @@ def main():
 
     frame_count = 0
     use_sort_ratio = config.USE_SORT_RATIO  # Ratio of frames to apply SORT algorithm
+    prev_frame_data = {}
 
     while True:
         if all(len(frames) > 0 for frames in frames_dict.values()):
@@ -299,19 +325,12 @@ def main():
                 track_results = [model(frame, device=0, classes=0, conf=0.6) for frame in frames]
 
                 # Extract appearance features for each person from the detected results
-                features_list, sizes_list, color_hists_list, max_feature_length = extract_features(track_results)
-
-                # Unify the dimensions of the feature vectors
-                padded_features_list = []
-                for features in features_list:
-                    padded_features = []
-                    for feature in features:
-                        padded_feature = feature + [0] * (max_feature_length - len(feature))
-                        padded_features.append(padded_feature)
-                    padded_features_list.append(padded_features)
+                features_list, sizes_list, color_hists_list = extract_features(track_results)
 
                 # Match persons between frames based on appearance features
-                matched_indices = match_persons(padded_features_list, sizes_list, color_hists_list, use_sort_ratio)
+                matched_indices, curr_frame_data = match_persons(features_list, sizes_list, color_hists_list,
+                                                                 use_sort_ratio, prev_frame_data)
+                prev_frame_data = curr_frame_data
 
                 # Find the frame with the most detected people
                 num_people_per_frame = [len(features) for features in features_list]
@@ -319,6 +338,7 @@ def main():
 
                 # Visualize the matching results on the frames
                 visualize_results(track_results, matched_indices, base_frame_index)
+
         frame_count += 1
 
         # Press 'q' to quit the program
