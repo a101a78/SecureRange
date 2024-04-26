@@ -37,6 +37,9 @@ def video_reader(file_path, frames_dict, stop_event):
     cap.release()
 
 
+EPSILON = 1e-8  # Small value to avoid division by zero
+
+
 def calculate_similarity(feat1, feat2, size1, size2, color_hist1, color_hist2):
     """
     Calculate the similarity between two feature vectors.
@@ -50,35 +53,28 @@ def calculate_similarity(feat1, feat2, size1, size2, color_hist1, color_hist2):
     Returns:
         float: Similarity score.
     """
-    epsilon = 1e-8  # Small value to avoid division by zero
-
     # Ensure feature vectors have the same length
-    max_length = max(feat1.shape[1], feat2.shape[1])
-    feat1 = np.pad(feat1, ((0, 0), (0, max_length - feat1.shape[1])), mode='constant')
-    feat2 = np.pad(feat2, ((0, 0), (0, max_length - feat2.shape[1])), mode='constant')
+    min_length = min(feat1.shape[1], feat2.shape[1])
+    feat1 = feat1[:, :min_length]
+    feat2 = feat2[:, :min_length]
 
     # Calculate cosine similarity
     feat1_norm = np.linalg.norm(feat1)
     feat2_norm = np.linalg.norm(feat2)
-    if feat1_norm == 0 or feat2_norm == 0:
-        cos_sim = 0.0
-    else:
+    if feat1_norm > 0 and feat2_norm > 0:
         cos_sim = np.dot(feat1, feat2.T) / (feat1_norm * feat2_norm)
         cos_sim = cos_sim.item()  # Convert to scalar value
+    else:
+        cos_sim = 0.0
 
     # Calculate size similarity
-    size_sim = 1 - np.abs(size1 - size2) / (np.maximum(size1, size2) + epsilon)
+    size_sim = 1 - np.abs(size1 - size2) / (max(size1, size2) + EPSILON)
 
     # Calculate color histogram similarity
     if color_hist1 is not None and color_hist2 is not None:
-        if not isinstance(color_hist1, np.ndarray):
-            color_hist1 = np.array(color_hist1)
-        if not isinstance(color_hist2, np.ndarray):
-            color_hist2 = np.array(color_hist2)
-        if color_hist1.shape == color_hist2.shape:
-            color_sim = cv2.compareHist(color_hist1, color_hist2, cv2.HISTCMP_CORREL)
-        else:
-            color_sim = 0.0
+        color_hist1 = np.array(color_hist1)
+        color_hist2 = np.array(color_hist2)
+        color_sim = np.dot(color_hist1, color_hist2.T)
     else:
         color_sim = 0.0
 
@@ -133,23 +129,22 @@ def extract_features(track_results):
     sizes_list = []
     color_hists_list = []
 
-    for result in track_results:
+    for frame_results in track_results:
         features = []
         sizes = []
         color_hists = []
-        for r in result:
-            persons = [detection for detection in r.boxes.data.tolist() if detection[-1] == 0]
-            for person in persons:
+        for result in frame_results:
+            for person in result.boxes.data.tolist():
                 x1, y1, x2, y2 = map(int, person[:4])
-                person_img = r.orig_img[y1:y2, x1:x2]
+                person_img = result.orig_img[y1:y2, x1:x2]
                 person_result = model(person_img)
                 feature = person_result[0].boxes.conf.tolist()
                 features.append(feature)
                 sizes.append((x2 - x1) * (y2 - y1))
 
                 # Calculate color histogram
-                color_hist = cv2.calcHist([person_img], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
-                color_hist = cv2.normalize(color_hist, color_hist).flatten()
+                color_hist, _ = np.histogram(person_img.reshape(-1, 3), bins=8, range=(0, 256))
+                color_hist = color_hist / np.sum(color_hist)
                 color_hists.append(color_hist)
 
         features_list.append(features)
@@ -157,6 +152,51 @@ def extract_features(track_results):
         color_hists_list.append(color_hists)
 
     return features_list, sizes_list, color_hists_list
+
+
+def calculate_sort_similarity(features_list, i, j):
+    """
+    Calculate similarity matrix for SORT algorithm.
+    Args:
+        features_list (list): List of appearance features.
+        i (int): Index of the first frame.
+        j (int): Index of the second frame.
+    Returns:
+        numpy.ndarray: Similarity matrix.
+    """
+    iou_matrix = np.zeros((len(features_list[i]), len(features_list[j])))
+    for k in range(len(features_list[i])):
+        for L in range(len(features_list[j])):
+            iou_matrix[k, L] = calculate_iou(features_list[i][k], features_list[j][L])
+    return iou_matrix
+
+
+def calculate_deepsort_similarity(features_list, sizes_list, color_hists_list, i, j):
+    """
+    Calculate similarity matrix for DeepSORT algorithm.
+    Args:
+        features_list (list): List of appearance features.
+        sizes_list (list): List of sizes for each person in each frame.
+        color_hists_list (list): List of color histograms for each person in each frame.
+        i (int): Index of the first frame.
+        j (int): Index of the second frame.
+    Returns:
+        numpy.ndarray: Similarity matrix.
+    """
+    cos_sim = np.zeros((len(features_list[i]), len(features_list[j])))
+    for k in range(len(features_list[i])):
+        feat1 = np.array(features_list[i][k]).reshape(1, -1)
+        for L in range(len(features_list[j])):
+            feat2 = np.array(features_list[j][L]).reshape(1, -1)
+            size1 = sizes_list[i][k]
+            size2 = sizes_list[j][L]
+            if k < len(color_hists_list[i]) and L < len(color_hists_list[j]):
+                color_hist1 = color_hists_list[i][k]
+                color_hist2 = color_hists_list[j][L]
+                cos_sim[k, L] = calculate_similarity(feat1, feat2, size1, size2, color_hist1, color_hist2)
+            else:
+                cos_sim[k, L] = calculate_similarity(feat1, feat2, size1, size2, None, None)
+    return cos_sim
 
 
 def match_persons(features_list, sizes_list, color_hists_list, use_sort_ratio, prev_frame_data):
@@ -182,27 +222,12 @@ def match_persons(features_list, sizes_list, color_hists_list, use_sort_ratio, p
         for j in range(i + 1, num_frames):
             if np.random.rand() < use_sort_ratio:
                 # Apply SORT algorithm
-                iou_matrix = np.zeros((len(features_list[i]), len(features_list[j])))
-                for k in range(len(features_list[i])):
-                    for L in range(len(features_list[j])):
-                        iou_matrix[k, L] = calculate_iou(features_list[i][k], features_list[j][L])
-                row_ind, col_ind = linear_sum_assignment(-iou_matrix)
+                similarity_matrix = calculate_sort_similarity(features_list, i, j)
             else:
                 # Apply DeepSORT algorithm
-                cos_sim = np.zeros((len(features_list[i]), len(features_list[j])))
-                for k in range(len(features_list[i])):
-                    feat1 = np.array(features_list[i][k]).reshape(1, -1)
-                    for L in range(len(features_list[j])):
-                        feat2 = np.array(features_list[j][L]).reshape(1, -1)
-                        size1 = sizes_list[i][k]
-                        size2 = sizes_list[j][L]
-                        if k < len(color_hists_list[i]) and L < len(color_hists_list[j]):
-                            color_hist1 = color_hists_list[i][k]
-                            color_hist2 = color_hists_list[j][L]
-                            cos_sim[k, L] = calculate_similarity(feat1, feat2, size1, size2, color_hist1, color_hist2)
-                        else:
-                            cos_sim[k, L] = calculate_similarity(feat1, feat2, size1, size2, None, None)
-                row_ind, col_ind = linear_sum_assignment(-cos_sim)
+                similarity_matrix = calculate_deepsort_similarity(features_list, sizes_list, color_hists_list, i, j)
+
+            row_ind, col_ind = linear_sum_assignment(-similarity_matrix)
 
             matched_indices[i][j] = col_ind.tolist()
             matched_indices[j][i] = row_ind.tolist()
@@ -210,24 +235,17 @@ def match_persons(features_list, sizes_list, color_hists_list, use_sort_ratio, p
             # Update Kalman filter for matched objects
             for k, L in zip(row_ind, col_ind):
                 feature_length = len(features_list[j][L])
-                if i in prev_frame_data and k in prev_frame_data[i]:
-                    kf = prev_frame_data[i][k]['kf']
-                    if kf.dim_x != feature_length:
-                        kf = KalmanFilter(dim_x=feature_length, dim_z=feature_length)
-                else:
-                    kf = KalmanFilter(dim_x=feature_length, dim_z=feature_length)
+                kf = prev_frame_data.get((i, k), KalmanFilter(dim_x=feature_length, dim_z=feature_length))
 
                 kf.F = np.eye(feature_length)
                 kf.H = np.eye(feature_length)
                 kf.R = np.eye(feature_length) * 10.0
                 kf.P = np.eye(feature_length) * 1000.0
                 kf.Q = np.eye(feature_length) * 0.01
-                measurement = np.array(features_list[j][L]).reshape(-1, 1)
-                print(f"Measurement shape: {measurement.shape}")
                 kf.predict()
-                kf.update(measurement)
+                kf.update(np.array(features_list[j][L]).reshape(-1, 1))
 
-                curr_frame_data[i][k] = {'kf': kf}
+                curr_frame_data[i][k] = kf
 
     return matched_indices, curr_frame_data
 
@@ -254,7 +272,7 @@ def calculate_iou(bbox1, bbox2):
     bbox2_area = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
     union_area = bbox1_area + bbox2_area - intersection_area
 
-    iou = intersection_area / (union_area + 1e-6)
+    iou = intersection_area / (union_area + EPSILON)
     return iou
 
 
@@ -298,9 +316,6 @@ def visualize_results(track_results, matched_indices, base_frame_index):
 
 
 def main():
-    """
-    Main function to run the multi-object tracking program.
-    """
     frames_dict = {file_path: [] for file_path in config.VIDEO_FILES}
     stop_event = threading.Event()
 
