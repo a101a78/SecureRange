@@ -14,6 +14,9 @@ KEYFRAME_INTERVAL = 10
 # SORT 알고리즘을 적용할 프레임의 비율
 USE_SORT_RATIO = 0.6
 
+# Re-identification 유사도 임계값
+REID_THRESHOLD = 0.7
+
 # 프레임 크기
 FRAME_SIZE = {
     'w': 640,

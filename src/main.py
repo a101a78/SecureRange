@@ -199,7 +199,7 @@ def calculate_deepsort_similarity(features_list, sizes_list, color_hists_list, i
     return cos_sim
 
 
-def match_persons(features_list, sizes_list, color_hists_list, use_sort_ratio, prev_frame_data):
+def match_persons(features_list, sizes_list, color_hists_list, use_sort_ratio, prev_frame_data, occluded_tracks):
     """
     Match persons between frames based on appearance features using the Hungarian algorithm.
     Args:
@@ -208,10 +208,12 @@ def match_persons(features_list, sizes_list, color_hists_list, use_sort_ratio, p
         color_hists_list (list): List of color histograms for each person in each frame.
         use_sort_ratio (float): Ratio of frames to apply SORT algorithm instead of DeepSORT.
         prev_frame_data (dict): Data from the previous frame.
+        occluded_tracks (dict): Dictionary to store occluded tracks.
     Returns:
-        tuple: (matched_indices, curr_frame_data)
+        tuple: (matched_indices, curr_frame_data, occluded_tracks)
             - matched_indices (list): Matched index information.
             - curr_frame_data (dict): Data for the current frame.
+            - occluded_tracks (dict): Updated dictionary of occluded tracks.
     """
     num_frames = len(features_list)
     matched_indices = [[[] for _ in range(num_frames)] for _ in range(num_frames)]
@@ -247,7 +249,37 @@ def match_persons(features_list, sizes_list, color_hists_list, use_sort_ratio, p
 
                 curr_frame_data[i][k] = kf
 
-    return matched_indices, curr_frame_data
+            # Handle occluded tracks
+            for k in range(len(features_list[i])):
+                if k not in row_ind:
+                    if (i, k) in prev_frame_data:
+                        kf = prev_frame_data[(i, k)]
+                        kf.predict()
+                        occluded_tracks[(i, k)] = kf
+                    else:
+                        occluded_tracks[(i, k)] = None
+
+    # Re-identify occluded tracks
+    for (i, k), kf in occluded_tracks.items():
+        if kf is not None:
+            best_match = None
+            best_similarity = -1
+            for j in range(num_frames):
+                if j != i:
+                    for L in range(len(features_list[j])):
+                        if (j, L) not in curr_frame_data.values():
+                            feat = np.array(features_list[j][L]).reshape(1, -1)
+                            similarity = calculate_similarity(kf.x, feat, sizes_list[i][k], sizes_list[j][L],
+                                                              color_hists_list[i][k], color_hists_list[j][L])
+                            if similarity > best_similarity:
+                                best_match = (j, L)
+                                best_similarity = similarity
+            if best_match is not None and best_similarity > config.REID_THRESHOLD:
+                curr_frame_data[best_match[0]][best_match[1]] = kf
+                matched_indices[i][best_match[0]].append(best_match[1])
+                matched_indices[best_match[0]][i].append(k)
+
+    return matched_indices, curr_frame_data, occluded_tracks
 
 
 def calculate_iou(bbox1, bbox2):
@@ -329,6 +361,7 @@ def main():
     frame_count = 0
     use_sort_ratio = config.USE_SORT_RATIO  # Ratio of frames to apply SORT algorithm
     prev_frame_data = {}
+    occluded_tracks = {}
 
     while True:
         if all(len(frames) > 0 for frames in frames_dict.values()):
@@ -343,8 +376,10 @@ def main():
                 features_list, sizes_list, color_hists_list = extract_features(track_results)
 
                 # Match persons between frames based on appearance features
-                matched_indices, curr_frame_data = match_persons(features_list, sizes_list, color_hists_list,
-                                                                 use_sort_ratio, prev_frame_data)
+                matched_indices, curr_frame_data, occluded_tracks = match_persons(features_list, sizes_list,
+                                                                                  color_hists_list,
+                                                                                  use_sort_ratio, prev_frame_data,
+                                                                                  occluded_tracks)
                 prev_frame_data = curr_frame_data
 
                 # Find the frame with the most detected people
