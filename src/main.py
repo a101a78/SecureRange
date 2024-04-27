@@ -1,3 +1,4 @@
+import colorsys
 import threading
 
 import cv2
@@ -112,6 +113,23 @@ def get_scale(frame_width, frame_height, orig_shape):
     scale_x = frame_width / orig_width
     scale_y = frame_height / orig_height
     return scale_x, scale_y
+
+
+def generate_colors(num_colors):
+    """
+    Generate a list of distinct colors.
+    Args:
+        num_colors (int): Number of colors to generate.
+    Returns:
+        list: List of RGB color tuples.
+    """
+    colors = []
+    hue_step = 1.0 / num_colors
+    for i in range(num_colors):
+        hue = i * hue_step
+        rgb = colorsys.hsv_to_rgb(hue, 1.0, 1.0)
+        colors.append(tuple(int(c * 255) for c in rgb))
+    return colors
 
 
 def extract_features(track_results):
@@ -318,7 +336,9 @@ def visualize_results(track_results, matched_indices, base_frame_index):
     """
     frame_width = config.FRAME_SIZE['w']
     frame_height = config.FRAME_SIZE['h']
-    colors = [(0, 255, 0), (255, 0, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255), (0, 255, 255)]
+
+    max_people = max(len(result[0].boxes.data.tolist()) for result in track_results)
+    colors = generate_colors(max_people)
 
     for i in range(len(track_results)):
         frame = cv2.resize(track_results[i][0].orig_img, (frame_width, frame_height))
@@ -334,15 +354,18 @@ def visualize_results(track_results, matched_indices, base_frame_index):
 
             if i == base_frame_index:
                 color = colors[j % len(colors)]
+                object_id = j + 1
             else:
                 base_match_indices = matched_indices[base_frame_index][i]
                 if j < len(base_match_indices):
                     base_match_idx = base_match_indices[j]
                     color = colors[base_match_idx % len(colors)]
+                    object_id = base_match_idx + 1
                 else:
                     color = (255, 255, 255)  # Non-matched people are colored white
+                    object_id = None
 
-            draw_rectangle(frame, person_coords, color, j + 1)
+            draw_rectangle(frame, person_coords, color, object_id)
 
         cv2.imshow(f'Video {i + 1}', frame)
 
