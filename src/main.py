@@ -9,6 +9,8 @@ from ultralytics import YOLO
 
 import config
 
+EPSILON = 1e-8  # Small value to avoid division by zero
+
 model = YOLO(config.YOLO_MODEL_PATH)
 
 
@@ -38,7 +40,30 @@ def video_reader(file_path, frames_dict, stop_event):
     cap.release()
 
 
-EPSILON = 1e-8  # Small value to avoid division by zero
+def calculate_iou(bbox1, bbox2):
+    """
+    Calculate Intersection over Union (IoU) between two bounding boxes.
+    Args:
+        bbox1 (list): First bounding box coordinates [x1, y1, x2, y2].
+        bbox2 (list): Second bounding box coordinates [x1, y1, x2, y2].
+    Returns:
+        float: IoU value.
+    """
+    if len(bbox1) != 4 or len(bbox2) != 4:
+        return 0.0  # Return 0 if the bounding box coordinates are invalid
+
+    x1 = max(bbox1[0], bbox2[0])
+    y1 = max(bbox1[1], bbox2[1])
+    x2 = min(bbox1[2], bbox2[2])
+    y2 = min(bbox1[3], bbox2[3])
+
+    intersection_area = max(0, x2 - x1) * max(0, y2 - y1)
+    bbox1_area = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
+    bbox2_area = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
+    union_area = bbox1_area + bbox2_area - intersection_area
+
+    iou = intersection_area / (union_area + EPSILON)
+    return iou
 
 
 def calculate_similarity(feat1, feat2, size1, size2, color_hist1, color_hist2):
@@ -83,6 +108,51 @@ def calculate_similarity(feat1, feat2, size1, size2, color_hist1, color_hist2):
     similarity = 0.5 * cos_sim + 0.3 * size_sim + 0.2 * color_sim
 
     return similarity
+
+
+def calculate_sort_similarity(features_list, i, j):
+    """
+    Calculate similarity matrix for SORT algorithm.
+    Args:
+        features_list (list): List of appearance features.
+        i (int): Index of the first frame.
+        j (int): Index of the second frame.
+    Returns:
+        numpy.ndarray: Similarity matrix.
+    """
+    iou_matrix = np.zeros((len(features_list[i]), len(features_list[j])))
+    for k in range(len(features_list[i])):
+        for L in range(len(features_list[j])):
+            iou_matrix[k, L] = calculate_iou(features_list[i][k], features_list[j][L])
+    return iou_matrix
+
+
+def calculate_deepsort_similarity(features_list, sizes_list, color_hists_list, i, j):
+    """
+    Calculate similarity matrix for DeepSORT algorithm.
+    Args:
+        features_list (list): List of appearance features.
+        sizes_list (list): List of sizes for each person in each frame.
+        color_hists_list (list): List of color histograms for each person in each frame.
+        i (int): Index of the first frame.
+        j (int): Index of the second frame.
+    Returns:
+        numpy.ndarray: Similarity matrix.
+    """
+    cos_sim = np.zeros((len(features_list[i]), len(features_list[j])))
+    for k in range(len(features_list[i])):
+        feat1 = np.array(features_list[i][k]).reshape(1, -1)
+        for L in range(len(features_list[j])):
+            feat2 = np.array(features_list[j][L]).reshape(1, -1)
+            size1 = sizes_list[i][k]
+            size2 = sizes_list[j][L]
+            if k < len(color_hists_list[i]) and L < len(color_hists_list[j]):
+                color_hist1 = color_hists_list[i][k]
+                color_hist2 = color_hists_list[j][L]
+                cos_sim[k, L] = calculate_similarity(feat1, feat2, size1, size2, color_hist1, color_hist2)
+            else:
+                cos_sim[k, L] = calculate_similarity(feat1, feat2, size1, size2, None, None)
+    return cos_sim
 
 
 def draw_rectangle(frame, person, color, object_id):
@@ -172,51 +242,6 @@ def extract_features(track_results):
     return features_list, sizes_list, color_hists_list
 
 
-def calculate_sort_similarity(features_list, i, j):
-    """
-    Calculate similarity matrix for SORT algorithm.
-    Args:
-        features_list (list): List of appearance features.
-        i (int): Index of the first frame.
-        j (int): Index of the second frame.
-    Returns:
-        numpy.ndarray: Similarity matrix.
-    """
-    iou_matrix = np.zeros((len(features_list[i]), len(features_list[j])))
-    for k in range(len(features_list[i])):
-        for L in range(len(features_list[j])):
-            iou_matrix[k, L] = calculate_iou(features_list[i][k], features_list[j][L])
-    return iou_matrix
-
-
-def calculate_deepsort_similarity(features_list, sizes_list, color_hists_list, i, j):
-    """
-    Calculate similarity matrix for DeepSORT algorithm.
-    Args:
-        features_list (list): List of appearance features.
-        sizes_list (list): List of sizes for each person in each frame.
-        color_hists_list (list): List of color histograms for each person in each frame.
-        i (int): Index of the first frame.
-        j (int): Index of the second frame.
-    Returns:
-        numpy.ndarray: Similarity matrix.
-    """
-    cos_sim = np.zeros((len(features_list[i]), len(features_list[j])))
-    for k in range(len(features_list[i])):
-        feat1 = np.array(features_list[i][k]).reshape(1, -1)
-        for L in range(len(features_list[j])):
-            feat2 = np.array(features_list[j][L]).reshape(1, -1)
-            size1 = sizes_list[i][k]
-            size2 = sizes_list[j][L]
-            if k < len(color_hists_list[i]) and L < len(color_hists_list[j]):
-                color_hist1 = color_hists_list[i][k]
-                color_hist2 = color_hists_list[j][L]
-                cos_sim[k, L] = calculate_similarity(feat1, feat2, size1, size2, color_hist1, color_hist2)
-            else:
-                cos_sim[k, L] = calculate_similarity(feat1, feat2, size1, size2, None, None)
-    return cos_sim
-
-
 def match_persons(features_list, sizes_list, color_hists_list, use_sort_ratio, prev_frame_data, occluded_tracks):
     """
     Match persons between frames based on appearance features using the Hungarian algorithm.
@@ -298,32 +323,6 @@ def match_persons(features_list, sizes_list, color_hists_list, use_sort_ratio, p
                 matched_indices[best_match[0]][i].append(k)
 
     return matched_indices, curr_frame_data, occluded_tracks
-
-
-def calculate_iou(bbox1, bbox2):
-    """
-    Calculate Intersection over Union (IoU) between two bounding boxes.
-    Args:
-        bbox1 (list): First bounding box coordinates [x1, y1, x2, y2].
-        bbox2 (list): Second bounding box coordinates [x1, y1, x2, y2].
-    Returns:
-        float: IoU value.
-    """
-    if len(bbox1) != 4 or len(bbox2) != 4:
-        return 0.0  # Return 0 if the bounding box coordinates are invalid
-
-    x1 = max(bbox1[0], bbox2[0])
-    y1 = max(bbox1[1], bbox2[1])
-    x2 = min(bbox1[2], bbox2[2])
-    y2 = min(bbox1[3], bbox2[3])
-
-    intersection_area = max(0, x2 - x1) * max(0, y2 - y1)
-    bbox1_area = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
-    bbox2_area = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
-    union_area = bbox1_area + bbox2_area - intersection_area
-
-    iou = intersection_area / (union_area + EPSILON)
-    return iou
 
 
 def visualize_results(track_results, matched_indices, base_frame_index):
