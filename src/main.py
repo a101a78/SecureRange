@@ -110,20 +110,20 @@ def calculate_similarity(feat1, feat2, size1, size2, color_hist1, color_hist2):
     return similarity
 
 
-def calculate_sort_similarity(features_list, i, j):
+def calculate_sort_similarity(bbox_list, i, j):
     """
     Calculate similarity matrix for SORT algorithm.
     Args:
-        features_list (list): List of appearance features.
+        bbox_list (list): List of bounding box coordinates.
         i (int): Index of the first frame.
         j (int): Index of the second frame.
     Returns:
         numpy.ndarray: Similarity matrix.
     """
-    iou_matrix = np.zeros((len(features_list[i]), len(features_list[j])))
-    for k in range(len(features_list[i])):
-        for L in range(len(features_list[j])):
-            iou_matrix[k, L] = calculate_iou(features_list[i][k], features_list[j][L])
+    iou_matrix = np.zeros((len(bbox_list[i]), len(bbox_list[j])))
+    for k in range(len(bbox_list[i])):
+        for L in range(len(bbox_list[j])):
+            iou_matrix[k, L] = calculate_iou(bbox_list[i][k], bbox_list[j][L])
     return iou_matrix
 
 
@@ -204,23 +204,26 @@ def generate_colors(num_colors):
 
 def extract_features(track_results):
     """
-    Extract appearance features for each person from the detected results.
+    Extract appearance features and bounding box coordinates for each person from the detected results.
     Args:
         track_results (list): Detection results from the YOLOv8 model.
     Returns:
-        tuple: (features_list, sizes_list, color_hists_list)
+        tuple: (features_list, sizes_list, color_hists_list, bbox_list)
             - features_list (list): List of appearance features for each person in each frame.
             - sizes_list (list): List of sizes for each person in each frame.
             - color_hists_list (list): List of color histograms for each person in each frame.
+            - bbox_list (list): List of bounding box coordinates for each person in each frame.
     """
     features_list = []
     sizes_list = []
     color_hists_list = []
+    bbox_list = []
 
     for frame_results in track_results:
         features = []
         sizes = []
         color_hists = []
+        bboxes = []
         for result in frame_results:
             for person in result.boxes.data.tolist():
                 x1, y1, x2, y2 = map(int, person[:4])
@@ -229,6 +232,7 @@ def extract_features(track_results):
                 feature = person_result[0].boxes.conf.tolist()
                 features.append(feature)
                 sizes.append((x2 - x1) * (y2 - y1))
+                bboxes.append([x1, y1, x2, y2])
 
                 # Calculate color histogram
                 color_hist, _ = np.histogram(person_img.reshape(-1, 3), bins=8, range=(0, 256))
@@ -238,18 +242,20 @@ def extract_features(track_results):
         features_list.append(features)
         sizes_list.append(sizes)
         color_hists_list.append(color_hists)
+        bbox_list.append(bboxes)
 
-    return features_list, sizes_list, color_hists_list
+    return features_list, sizes_list, color_hists_list, bbox_list
 
 
-def match_persons(features_list, sizes_list, color_hists_list, use_sort_ratio, prev_frame_data, occluded_tracks,
-                  base_frame_index):
+def match_persons(features_list, sizes_list, color_hists_list, bbox_list, use_sort_ratio, prev_frame_data,
+                  occluded_tracks, base_frame_index):
     """
     Match persons between frames based on appearance features using the Hungarian algorithm.
     Args:
         features_list (list): List of appearance features.
         sizes_list (list): List of sizes for each person in each frame.
         color_hists_list (list): List of color histograms for each person in each frame.
+        bbox_list (list): List of bounding box coordinates for each person in each frame.
         use_sort_ratio (float): Ratio of frames to apply SORT algorithm instead of DeepSORT.
         prev_frame_data (dict): Data from the previous frame.
         occluded_tracks (dict): Dictionary to store occluded tracks.
@@ -269,7 +275,7 @@ def match_persons(features_list, sizes_list, color_hists_list, use_sort_ratio, p
         if i != base_frame_index:
             if np.random.rand() < use_sort_ratio:
                 # Apply SORT algorithm
-                similarity_matrix = calculate_sort_similarity(features_list, base_frame_index, i)
+                similarity_matrix = calculate_sort_similarity(bbox_list, base_frame_index, i)
             else:
                 # Apply DeepSORT algorithm
                 similarity_matrix = calculate_deepsort_similarity(features_list, sizes_list, color_hists_list,
@@ -401,14 +407,14 @@ def main():
                 track_results = [model(frame, device=0, classes=0, conf=0.6) for frame in frames]
 
                 # Extract appearance features for each person from the detected results
-                features_list, sizes_list, color_hists_list = extract_features(track_results)
+                features_list, sizes_list, color_hists_list, bbox_list = extract_features(track_results)
 
                 # Find the frame with the most detected people
                 num_people_per_frame = [len(features) for features in features_list]
                 base_frame_index = num_people_per_frame.index(max(num_people_per_frame))
 
                 matched_indices, curr_frame_data, occluded_tracks = match_persons(features_list, sizes_list,
-                                                                                  color_hists_list,
+                                                                                  color_hists_list, bbox_list,
                                                                                   use_sort_ratio, prev_frame_data,
                                                                                   occluded_tracks, base_frame_index)
                 prev_frame_data = curr_frame_data
