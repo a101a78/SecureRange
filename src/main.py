@@ -242,7 +242,8 @@ def extract_features(track_results):
     return features_list, sizes_list, color_hists_list
 
 
-def match_persons(features_list, sizes_list, color_hists_list, use_sort_ratio, prev_frame_data, occluded_tracks):
+def match_persons(features_list, sizes_list, color_hists_list, use_sort_ratio, prev_frame_data, occluded_tracks,
+                  base_frame_index):
     """
     Match persons between frames based on appearance features using the Hungarian algorithm.
     Args:
@@ -252,6 +253,7 @@ def match_persons(features_list, sizes_list, color_hists_list, use_sort_ratio, p
         use_sort_ratio (float): Ratio of frames to apply SORT algorithm instead of DeepSORT.
         prev_frame_data (dict): Data from the previous frame.
         occluded_tracks (dict): Dictionary to store occluded tracks.
+        base_frame_index (int): Index of the base frame.
     Returns:
         tuple: (matched_indices, curr_frame_data, occluded_tracks)
             - matched_indices (list): Matched index information.
@@ -264,23 +266,25 @@ def match_persons(features_list, sizes_list, color_hists_list, use_sort_ratio, p
 
     for i in range(num_frames):
         curr_frame_data[i] = {}
-        for j in range(i + 1, num_frames):
+        if i != base_frame_index:
             if np.random.rand() < use_sort_ratio:
                 # Apply SORT algorithm
-                similarity_matrix = calculate_sort_similarity(features_list, i, j)
+                similarity_matrix = calculate_sort_similarity(features_list, base_frame_index, i)
             else:
                 # Apply DeepSORT algorithm
-                similarity_matrix = calculate_deepsort_similarity(features_list, sizes_list, color_hists_list, i, j)
+                similarity_matrix = calculate_deepsort_similarity(features_list, sizes_list, color_hists_list,
+                                                                  base_frame_index, i)
 
             row_ind, col_ind = linear_sum_assignment(-similarity_matrix)
 
-            matched_indices[i][j] = col_ind.tolist()
-            matched_indices[j][i] = row_ind.tolist()
+            matched_indices[base_frame_index][i] = col_ind.tolist()
+            matched_indices[i][base_frame_index] = row_ind.tolist()
 
             # Update Kalman filter for matched objects
             for k, L in zip(row_ind, col_ind):
-                feature_length = len(features_list[j][L])
-                kf = prev_frame_data.get((i, k), KalmanFilter(dim_x=feature_length, dim_z=feature_length))
+                feature_length = len(features_list[i][L])
+                kf = prev_frame_data.get((base_frame_index, k),
+                                         KalmanFilter(dim_x=feature_length, dim_z=feature_length))
 
                 kf.F = np.eye(feature_length)
                 kf.H = np.eye(feature_length)
@@ -288,19 +292,19 @@ def match_persons(features_list, sizes_list, color_hists_list, use_sort_ratio, p
                 kf.P = np.eye(feature_length) * 1000.0
                 kf.Q = np.eye(feature_length) * 0.01
                 kf.predict()
-                kf.update(np.array(features_list[j][L]).reshape(-1, 1))
+                kf.update(np.array(features_list[i][L]).reshape(-1, 1))
 
-                curr_frame_data[i][k] = kf
+                curr_frame_data[i][L] = kf
 
             # Handle occluded tracks
-            for k in range(len(features_list[i])):
+            for k in range(len(features_list[base_frame_index])):
                 if k not in row_ind:
-                    if (i, k) in prev_frame_data:
-                        kf = prev_frame_data[(i, k)]
+                    if (base_frame_index, k) in prev_frame_data:
+                        kf = prev_frame_data[(base_frame_index, k)]
                         kf.predict()
-                        occluded_tracks[(i, k)] = kf
+                        occluded_tracks[(base_frame_index, k)] = kf
                     else:
-                        occluded_tracks[(i, k)] = None
+                        occluded_tracks[(base_frame_index, k)] = None
 
     # Re-identify occluded tracks
     for (i, k), kf in occluded_tracks.items():
@@ -308,19 +312,21 @@ def match_persons(features_list, sizes_list, color_hists_list, use_sort_ratio, p
             best_match = None
             best_similarity = -1
             for j in range(num_frames):
-                if j != i:
+                if j != base_frame_index:
                     for L in range(len(features_list[j])):
                         if (j, L) not in curr_frame_data.values():
                             feat = np.array(features_list[j][L]).reshape(1, -1)
-                            similarity = calculate_similarity(kf.x, feat, sizes_list[i][k], sizes_list[j][L],
-                                                              color_hists_list[i][k], color_hists_list[j][L])
+                            similarity = calculate_similarity(kf.x, feat, sizes_list[base_frame_index][k],
+                                                              sizes_list[j][L],
+                                                              color_hists_list[base_frame_index][k],
+                                                              color_hists_list[j][L])
                             if similarity > best_similarity:
                                 best_match = (j, L)
                                 best_similarity = similarity
             if best_match is not None and best_similarity > config.REID_THRESHOLD:
                 curr_frame_data[best_match[0]][best_match[1]] = kf
-                matched_indices[i][best_match[0]].append(best_match[1])
-                matched_indices[best_match[0]][i].append(k)
+                matched_indices[base_frame_index][best_match[0]].append(best_match[1])
+                matched_indices[best_match[0]][base_frame_index].append(k)
 
     return matched_indices, curr_frame_data, occluded_tracks
 
@@ -397,16 +403,15 @@ def main():
                 # Extract appearance features for each person from the detected results
                 features_list, sizes_list, color_hists_list = extract_features(track_results)
 
-                # Match persons between frames based on appearance features
-                matched_indices, curr_frame_data, occluded_tracks = match_persons(features_list, sizes_list,
-                                                                                  color_hists_list,
-                                                                                  use_sort_ratio, prev_frame_data,
-                                                                                  occluded_tracks)
-                prev_frame_data = curr_frame_data
-
                 # Find the frame with the most detected people
                 num_people_per_frame = [len(features) for features in features_list]
                 base_frame_index = num_people_per_frame.index(max(num_people_per_frame))
+
+                matched_indices, curr_frame_data, occluded_tracks = match_persons(features_list, sizes_list,
+                                                                                  color_hists_list,
+                                                                                  use_sort_ratio, prev_frame_data,
+                                                                                  occluded_tracks, base_frame_index)
+                prev_frame_data = curr_frame_data
 
                 # Visualize the matching results on the frames
                 visualize_results(track_results, matched_indices, base_frame_index)
