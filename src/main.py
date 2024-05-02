@@ -318,17 +318,18 @@ def match_persons(features_list, sizes_list, color_hists_list, bbox_list, use_so
             best_match = None
             best_similarity = -1
             for j in range(num_frames):
-                if j != base_frame_index:
-                    for L in range(len(features_list[j])):
-                        if (j, L) not in curr_frame_data.values():
-                            feat = np.array(features_list[j][L]).reshape(1, -1)
-                            similarity = calculate_similarity(kf.x, feat, sizes_list[base_frame_index][k],
-                                                              sizes_list[j][L],
-                                                              color_hists_list[base_frame_index][k],
-                                                              color_hists_list[j][L])
-                            if similarity > best_similarity:
-                                best_match = (j, L)
-                                best_similarity = similarity
+                if j == base_frame_index:
+                    continue
+                for L in range(len(features_list[j])):
+                    if (j, L) not in curr_frame_data.values():
+                        feat = np.array(features_list[j][L]).reshape(1, -1)
+                        similarity = calculate_similarity(kf.x, feat, sizes_list[base_frame_index][k],
+                                                            sizes_list[j][L],
+                                                            color_hists_list[base_frame_index][k],
+                                                            color_hists_list[j][L])
+                        if similarity > best_similarity:
+                            best_match = (j, L)
+                            best_similarity = similarity
             if best_match is not None and best_similarity > config.REID_THRESHOLD:
                 curr_frame_data[best_match[0]][best_match[1]] = kf
                 matched_indices[base_frame_index][best_match[0]].append(best_match[1])
