@@ -102,8 +102,8 @@ def calculate_similarity(feat1, feat2, size1, size2, color_hist1, color_hist2):
     else:
         color_sim = 0.0
 
-    # Combine similarity scores
-    similarity = 0.5 * cos_sim + 0.3 * size_sim + 0.2 * color_sim
+    # Combine similarity scores with revised weights
+    similarity = 0.55 * cos_sim + 0.25 * size_sim + 0.2 * color_sim
 
     return similarity
 
