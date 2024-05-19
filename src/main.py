@@ -1,5 +1,6 @@
 import colorsys
 import threading
+import queue
 
 import cv2
 import numpy as np
@@ -14,30 +15,34 @@ EPSILON = 1e-8  # Small value to avoid division by zero
 model = YOLO(config.YOLO_MODEL_PATH)
 
 
-def video_reader(file_path, frames_dict, stop_event):
+def video_reader(file_path, frames_queue, stop_event):
     """
-    Read frames from a video file and add them to frames_dict.
+    Read frames from a video file and add them to frames_queue.
     Args:
         file_path (str): Path to the video file.
-        frames_dict (dict): Dictionary to store the read video frames.
+        frames_queue (queue.Queue): Queue to store the read video frames.
         stop_event (threading.Event): Event to stop the thread.
     """
-    cap = cv2.VideoCapture(file_path)
+    try:
+        cap = cv2.VideoCapture(file_path)
 
-    if not cap.isOpened():
-        print(f'Error opening video file: {file_path}')
+        if not cap.isOpened():
+            print(f'Error opening video file: {file_path}')
+            stop_event.set()
+            return
+
+        while not stop_event.is_set():
+            ret, frame = cap.read()
+
+            if not ret:
+                break
+
+            frames_queue.put((file_path, frame))
+
+        cap.release()
+    except Exception as e:
+        print(f'Exception occurred while reading video file {file_path}: {e}')
         stop_event.set()
-        return
-
-    while not stop_event.is_set():
-        ret, frame = cap.read()
-
-        if not ret:
-            break
-
-        frames_dict[file_path].append(frame)
-
-    cap.release()
 
 
 def calculate_iou(bbox1, bbox2):
@@ -79,19 +84,12 @@ def calculate_similarity(feat1, feat2, size1, size2, color_hist1, color_hist2):
     Returns:
         float: Similarity score.
     """
-    # Ensure feature vectors have the same length
-    min_length = min(feat1.shape[1], feat2.shape[1])
-    feat1 = feat1[:, :min_length]
-    feat2 = feat2[:, :min_length]
+    # Normalize feature vectors
+    feat1 = feat1 / (np.linalg.norm(feat1) + EPSILON)
+    feat2 = feat2 / (np.linalg.norm(feat2) + EPSILON)
 
     # Calculate cosine similarity
-    feat1_norm = np.linalg.norm(feat1)
-    feat2_norm = np.linalg.norm(feat2)
-    if feat1_norm > 0 and feat2_norm > 0:
-        cos_sim = np.dot(feat1, feat2.T) / (feat1_norm * feat2_norm)
-        cos_sim = cos_sim.item()  # Convert to scalar value
-    else:
-        cos_sim = 0.0
+    cos_sim = np.dot(feat1, feat2.T)
 
     # Calculate size similarity
     size_sim = 1 - np.abs(size1 - size2) / (max(size1, size2) + EPSILON)
@@ -219,7 +217,7 @@ def extract_features(track_results):
     color_hists_list = []
     bbox_list = []
 
-    for frame_results in track_results:
+    def process_frame(frame_results):
         features = []
         sizes = []
         color_hists = []
@@ -239,10 +237,28 @@ def extract_features(track_results):
                 color_hist = color_hist / np.sum(color_hist)
                 color_hists.append(color_hist)
 
-        features_list.append(features)
-        sizes_list.append(sizes)
-        color_hists_list.append(color_hists)
-        bbox_list.append(bboxes)
+        return features, sizes, color_hists, bboxes
+
+    # Create threads for each frame
+    threads = []
+    results = [None] * len(track_results)
+
+    for i, frame_results in enumerate(track_results):
+        t = threading.Thread(target=lambda idx, fr: results.__setitem__(idx, process_frame(fr)),
+                             args=(i, frame_results))
+        threads.append(t)
+        t.start()
+
+    # Wait for all threads to complete
+    for t in threads:
+        t.join()
+
+    # Collect results
+    for res in results:
+        features_list.append(res[0])
+        sizes_list.append(res[1])
+        color_hists_list.append(res[2])
+        bbox_list.append(res[3])
 
     return features_list, sizes_list, color_hists_list, bbox_list
 
@@ -324,9 +340,9 @@ def match_persons(features_list, sizes_list, color_hists_list, bbox_list, use_so
                     if (j, L) not in curr_frame_data.values():
                         feat = np.array(features_list[j][L]).reshape(1, -1)
                         similarity = calculate_similarity(kf.x, feat, sizes_list[base_frame_index][k],
-                                                            sizes_list[j][L],
-                                                            color_hists_list[base_frame_index][k],
-                                                            color_hists_list[j][L])
+                                                          sizes_list[j][L],
+                                                          color_hists_list[base_frame_index][k],
+                                                          color_hists_list[j][L])
                         if similarity > best_similarity:
                             best_match = (j, L)
                             best_similarity = similarity
@@ -383,13 +399,13 @@ def visualize_results(track_results, matched_indices, base_frame_index):
 
 
 def main():
-    frames_dict = {file_path: [] for file_path in config.VIDEO_FILES}
+    frames_queue = queue.Queue()
     stop_event = threading.Event()
 
     # Create and start threads for each video file
     threads = []
     for i, file_path in enumerate(config.VIDEO_FILES):
-        t = threading.Thread(target=video_reader, args=(file_path, frames_dict, stop_event))
+        t = threading.Thread(target=video_reader, args=(file_path, frames_queue, stop_event))
         threads.append(t)
         t.start()
 
@@ -399,13 +415,15 @@ def main():
     occluded_tracks = {}
 
     while True:
-        if all(len(frames) > 0 for frames in frames_dict.values()):
-            # Extract frames from frames_dict
-            frames = [frames_dict[file_path].pop(0) for file_path in config.VIDEO_FILES]
+        if frames_queue.qsize() >= len(config.VIDEO_FILES):
+            # Extract frames from frames_queue
+            frames = []
+            for _ in range(len(config.VIDEO_FILES)):
+                frames.append(frames_queue.get()[1])
 
             if frame_count % config.KEYFRAME_INTERVAL == 0:
                 # Perform object detection using YOLOv8 for each frame
-                track_results = [model(frame, device=0, classes=0, conf=0.6) for frame in frames]
+                track_results = [model(frame, device=0, classes=0, conf=0.75) for frame in frames]
 
                 # Extract appearance features for each person from the detected results
                 features_list, sizes_list, color_hists_list, bbox_list = extract_features(track_results)
