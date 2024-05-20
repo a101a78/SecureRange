@@ -34,10 +34,15 @@ def video_reader(file_path, frames_queue, stop_event):
         while not stop_event.is_set():
             ret, frame = cap.read()
 
-            if not ret:
+            if not ret or frame is None:
                 break
 
-            frames_queue.put((file_path, frame))
+            try:
+                frames_queue.put((file_path, frame), timeout=1)
+            except queue.Full:
+                print("Queue is full, stopping video reader.")
+                stop_event.set()
+                break
 
         cap.release()
     except Exception as e:
