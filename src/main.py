@@ -1,6 +1,6 @@
 import colorsys
-import threading
 import queue
+import threading
 
 import cv2
 import numpy as np
@@ -46,16 +46,17 @@ def video_reader(file_path, frames_queue, stop_event):
 
 
 def calculate_iou(bbox1, bbox2):
-    """
-    Calculate Intersection over Union (IoU) between two bounding boxes.
-    Args:
-        bbox1 (list): First bounding box coordinates [x1, y1, x2, y2].
-        bbox2 (list): Second bounding box coordinates [x1, y1, x2, y2].
-    Returns:
-        float: IoU value.
-    """
     if len(bbox1) != 4 or len(bbox2) != 4:
-        return 0.0  # Return 0 if the bounding box coordinates are invalid
+        raise ValueError("Invalid bounding box coordinates")
+
+    if any(np.isnan(bbox1)) or any(np.isnan(bbox2)):
+        raise ValueError("Bounding box coordinates contain NaN")
+
+    if any(np.isinf(bbox1)) or any(np.isinf(bbox2)):
+        raise ValueError("Bounding box coordinates contain infinity")
+
+    if bbox1[0] == bbox1[2] or bbox1[1] == bbox1[3] or bbox2[0] == bbox2[2] or bbox2[1] == bbox2[3]:
+        raise ValueError("Bounding box has zero width or height")
 
     x1 = max(bbox1[0], bbox2[0])
     y1 = max(bbox1[1], bbox2[1])
@@ -68,7 +69,7 @@ def calculate_iou(bbox1, bbox2):
     union_area = bbox1_area + bbox2_area - intersection_area
 
     iou = intersection_area / (union_area + EPSILON)
-    return iou
+    return max(0.0, iou)  # Ensure IoU is not negative
 
 
 def calculate_similarity(feat1, feat2, size1, size2, color_hist1, color_hist2):
