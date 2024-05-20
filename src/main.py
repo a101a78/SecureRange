@@ -135,14 +135,19 @@ def calculate_similarity(feat1, feat2, size1, size2, color_hist1, color_hist2):
 
 def calculate_sort_similarity(bbox_list, i, j):
     """
-    Calculate similarity matrix for SORT algorithm.
+    Calculate similarity matrix for SORT algorithm based on IoU.
     Args:
-        bbox_list (list): List of bounding box coordinates.
+        bbox_list (list): List of bounding box coordinates for multiple frames.
         i (int): Index of the first frame.
         j (int): Index of the second frame.
     Returns:
-        numpy.ndarray: Similarity matrix.
+        numpy.ndarray: Similarity matrix based on IoU.
+    Raises:
+        ValueError: If any bounding box list is None.
     """
+    if bbox_list is None or bbox_list[i] is None or bbox_list[j] is None:
+        raise ValueError("Bounding box list cannot be None")
+
     iou_matrix = np.zeros((len(bbox_list[i]), len(bbox_list[j])))
     for k in range(len(bbox_list[i])):
         for L in range(len(bbox_list[j])):
@@ -216,6 +221,9 @@ def generate_colors(num_colors):
     Returns:
         list: List of RGB color tuples.
     """
+    if num_colors == 0:
+        return []
+
     colors = []
     hue_step = 1.0 / num_colors
     for i in range(num_colors):
