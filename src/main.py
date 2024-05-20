@@ -51,6 +51,20 @@ def video_reader(file_path, frames_queue, stop_event):
 
 
 def calculate_iou(bbox1, bbox2):
+    """
+    Calculate the Intersection over Union (IoU) of two bounding boxes.
+    Args:
+        bbox1 (list or tuple): Coordinates of the first bounding box (x1, y1, x2, y2).
+        bbox2 (list or tuple): Coordinates of the second bounding box (x1, y1, x2, y2).
+    Returns:
+        float: IoU value.
+    Raises:
+        ValueError: If the input bounding boxes are invalid.
+    """
+
+    if bbox1 is None or bbox2 is None:
+        raise ValueError("Bounding box cannot be None")
+
     if len(bbox1) != 4 or len(bbox2) != 4:
         raise ValueError("Invalid bounding box coordinates")
 
