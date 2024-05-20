@@ -103,7 +103,12 @@ def calculate_similarity(feat1, feat2, size1, size2, color_hist1, color_hist2):
         color_hist2: Color histogram of the second person.
     Returns:
         float: Similarity score.
+    Raises:
+        ValueError: If input vectors have different lengths.
     """
+    if len(feat1) != len(feat2):
+        raise ValueError("Feature vectors must be of the same length")
+
     # Normalize feature vectors
     feat1 = feat1 / (np.linalg.norm(feat1) + EPSILON)
     feat2 = feat2 / (np.linalg.norm(feat2) + EPSILON)
