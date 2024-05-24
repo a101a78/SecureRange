@@ -1,10 +1,10 @@
 import threading
 import time
-import tkinter as tk
 from queue import Queue
 
 import cv2
 import numpy as np
+import pygame
 from ultralytics import YOLO
 
 from src import config
@@ -75,53 +75,59 @@ class CommonCoordinateSystem:
 
 
 class GUI:
-    def __init__(self, root, common_coord_system):
-        self.root = root
+    def __init__(self, common_coord_system):
+        pygame.init()
+        self.screen = pygame.display.set_mode(
+            (config.GUI_SETTINGS["WINDOW_WIDTH"], config.GUI_SETTINGS["WINDOW_HEIGHT"]))
+        pygame.display.set_caption(config.GUI_SETTINGS["WINDOW_TITLE"])
+        self.clock = pygame.time.Clock()
         self.common_coord_system = common_coord_system
-        self.canvas = tk.Canvas(root, width=800, height=600)
-        self.canvas.pack()
-        self.update_gui()
-        self.canvas.bind("<Motion>", self.on_mouse_move)
         self.hovered_id = None
 
     def update_gui(self):
-        self.canvas.delete("all")
+        self.screen.fill(config.GUI_SETTINGS["BACKGROUND_COLOR"])
         objects = self.common_coord_system.get_objects()
-        current_time = time.time()
         for obj_id, data in objects.items():
-            valid_boxes = [box for box in data['boxes'] if current_time - box[5] <= config.TRAJECTORY_DWELL_TIME]
-            data['boxes'] = valid_boxes
-            for i, (camera_id, x1, y1, x2, y2, timestamp) in enumerate(valid_boxes):
+            for (camera_id, x1, y1, x2, y2, timestamp) in data['boxes']:
                 center_x = (x1 + x2) / 2
                 center_y = (y1 + y2) / 2
-                self.canvas.create_oval(center_x - 3, center_y - 3, center_x + 3, center_y + 3, fill="red")
-                if i > 0:
-                    prev_center_x = (valid_boxes[i - 1][1] + valid_boxes[i - 1][3]) / 2
-                    prev_center_y = (valid_boxes[i - 1][2] + valid_boxes[i - 1][4]) / 2
-                    self.canvas.create_line(prev_center_x, prev_center_y, center_x, center_y, fill="blue")
+                pygame.draw.circle(self.screen, config.GUI_SETTINGS["CIRCLE_COLOR"], (int(center_x), int(center_y)),
+                                   config.GUI_SETTINGS["CIRCLE_RADIUS"])
                 if self.hovered_id == obj_id:
-                    self.canvas.create_text(center_x, center_y - 10, text=f"ID: {obj_id}", fill="blue")
-        self.root.after(100, self.update_gui)
+                    font = pygame.font.Font(None, config.GUI_SETTINGS["FONT_SIZE"])
+                    text = font.render(f"ID: {obj_id}", True, config.GUI_SETTINGS["TEXT_COLOR"])
+                    self.screen.blit(text, (int(center_x), int(center_y) - 10))
+        pygame.display.flip()
 
-    def on_mouse_move(self, event):
+    def check_hover(self, pos):
         self.hovered_id = None
         objects = self.common_coord_system.get_objects()
         for obj_id, data in objects.items():
             for camera_id, x1, y1, x2, y2, timestamp in data['boxes']:
                 center_x = (x1 + x2) / 2
                 center_y = (y1 + y2) / 2
-                if center_x - 3 < event.x < center_x + 3 and center_y - 3 < event.y < center_y + 3:
+                if center_x - 3 < pos[0] < center_x + 3 and center_y - 3 < pos[1] < center_y + 3:
                     self.hovered_id = obj_id
                     break
             if self.hovered_id is not None:
                 break
 
+    def run(self):
+        running = True
+        while running:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                elif event.type == pygame.MOUSEMOTION:
+                    self.check_hover(event.pos)
+            self.update_gui()
+            self.clock.tick(config.GUI_SETTINGS["FRAME_RATE"])
+        pygame.quit()
+
 
 def main():
-    root = tk.Tk()
-    root.title("Multi-Camera Tracking System")
     common_coord_system = CommonCoordinateSystem()
-    GUI(root, common_coord_system)
+    gui = GUI(common_coord_system)
 
     queues = [Queue() for _ in config.VIDEO_FILES]
     video_processors = [VideoProcessor(video_path, queues[i], i) for i, video_path in enumerate(config.VIDEO_FILES)]
@@ -130,18 +136,24 @@ def main():
         vp.start()
 
     def process_queue():
-        for q in queues:
-            while not q.empty():
-                camera_id, x1, y1, x2, y2, timestamp = q.get()
-                common_coord_system.update(camera_id, x1, y1, x2, y2, timestamp)
-        root.after(50, process_queue)
+        while True:
+            for q in queues:
+                while not q.empty():
+                    camera_id, x1, y1, x2, y2, timestamp = q.get()
+                    common_coord_system.update(camera_id, x1, y1, x2, y2, timestamp)
+            time.sleep(config.QUEUE_PROCESS_DELAY)
 
-    process_queue()
-    root.mainloop()
+    queue_thread = threading.Thread(target=process_queue)
+    queue_thread.daemon = True
+    queue_thread.start()
+
+    gui.run()
 
     for vp in video_processors:
         vp.stop()
         vp.join()
+
+    queue_thread.join()
 
 
 if __name__ == "__main__":
