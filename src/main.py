@@ -135,8 +135,10 @@ def main():
     for vp in video_processors:
         vp.start()
 
+    stop_event = threading.Event()
+
     def process_queue():
-        while True:
+        while not stop_event.is_set():
             for q in queues:
                 while not q.empty():
                     camera_id, x1, y1, x2, y2, timestamp = q.get()
@@ -149,6 +151,7 @@ def main():
 
     gui.run()
 
+    stop_event.set()
     for vp in video_processors:
         vp.stop()
         vp.join()
