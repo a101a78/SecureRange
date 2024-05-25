@@ -82,7 +82,6 @@ class GUI:
         pygame.display.set_caption(config.GUI_SETTINGS["WINDOW_TITLE"])
         self.clock = pygame.time.Clock()
         self.common_coord_system = common_coord_system
-        self.hovered_id = None
 
     def update_gui(self):
         self.screen.fill(config.GUI_SETTINGS["BACKGROUND_COLOR"])
@@ -93,24 +92,7 @@ class GUI:
                 center_y = (y1 + y2) / 2
                 pygame.draw.circle(self.screen, config.GUI_SETTINGS["CIRCLE_COLOR"], (int(center_x), int(center_y)),
                                    config.GUI_SETTINGS["CIRCLE_RADIUS"])
-                if self.hovered_id == obj_id:
-                    font = pygame.font.Font(None, config.GUI_SETTINGS["FONT_SIZE"])
-                    text = font.render(f"ID: {obj_id}", True, config.GUI_SETTINGS["TEXT_COLOR"])
-                    self.screen.blit(text, (int(center_x), int(center_y) - 10))
         pygame.display.flip()
-
-    def check_hover(self, pos):
-        self.hovered_id = None
-        objects = self.common_coord_system.get_objects()
-        for obj_id, data in objects.items():
-            for camera_id, x1, y1, x2, y2, timestamp in data['boxes']:
-                center_x = (x1 + x2) / 2
-                center_y = (y1 + y2) / 2
-                if center_x - 3 < pos[0] < center_x + 3 and center_y - 3 < pos[1] < center_y + 3:
-                    self.hovered_id = obj_id
-                    break
-            if self.hovered_id is not None:
-                break
 
     def run(self):
         running = True
@@ -118,8 +100,6 @@ class GUI:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
-                elif event.type == pygame.MOUSEMOTION:
-                    self.check_hover(event.pos)
             self.update_gui()
             self.clock.tick(config.GUI_SETTINGS["FRAME_RATE"])
         pygame.quit()
