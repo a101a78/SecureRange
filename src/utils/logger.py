@@ -42,5 +42,5 @@ class Logger:
         self.close()
 
 # Example usage:
-# with Logger('my_log.txt') as logger:
+# with Logger([args]) as logger:
 #     logger.log('This is a log message.')
