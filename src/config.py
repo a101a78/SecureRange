@@ -6,21 +6,21 @@ VIDEO_FILES = [
 
 # YOLO model settings
 YOLO_MODEL_PATH = "yolov8x.pt"
-CONFIDENCE_THRESHOLD = 0.5
+CONFIDENCE_THRESHOLD = 0.5  # Minimum confidence threshold for object detection
 
 # Detection settings
-FRAME_SKIP = 5
+FRAME_SKIP = 5  # Number of frames to skip between each detection
 
 # Coordinate system settings
-COMMON_COORDINATE_SYSTEM_SCALE = 1000
-COORDINATE_MATCH_THRESHOLD = 5
+COMMON_COORDINATE_SYSTEM_SCALE = 1000  # Scale factor for converting to a common coordinate system
+COORDINATE_MATCH_THRESHOLD = 5  # Threshold for matching coordinates between frames
 
 # Pygame GUI settings
 GUI_SETTINGS = {
     "WINDOW_TITLE": "Multi-Camera Tracking System",
     "WINDOW_WIDTH": 800,
     "WINDOW_HEIGHT": 600,
-    "FRAME_RATE": 60,
+    "FRAME_RATE": 60,  # Frame rate for the GUI update loop
     "BACKGROUND_COLOR": (255, 255, 255),
     "CIRCLE_COLOR": (255, 0, 0),
     "CIRCLE_RADIUS": 3,
@@ -29,4 +29,4 @@ GUI_SETTINGS = {
 }
 
 # Queue processing delay
-QUEUE_PROCESS_DELAY = 0.05
+QUEUE_PROCESS_DELAY = 0.05  # Delay between each queue processing cycle in seconds
