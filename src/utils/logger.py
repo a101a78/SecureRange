@@ -22,7 +22,7 @@ class AsyncLogger:
         self.file_name = os.path.join(log_folder, f"{current_time}_{base_name}{ext}")
 
         self.queue = Queue()
-        self.file = open(self.file_name, 'w')
+        self.file = open(self.file_name, 'w', encoding='utf-8')
         self.thread = Thread(target=self._process_queue)
         self.thread.daemon = True
         self.thread.start()
