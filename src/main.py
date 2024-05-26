@@ -8,7 +8,7 @@ import pygame
 from ultralytics import YOLO
 
 from src import config
-from utils.logger import Logger
+from utils.logger import AsyncLogger
 
 
 class VideoProcessor(threading.Thread):
@@ -116,7 +116,7 @@ class GUI:
 
 
 def main():
-    with Logger() as logger:
+    with AsyncLogger() as logger:
         logger.log('Starting main function')
 
         common_coord_system = CommonCoordinateSystem(logger)
