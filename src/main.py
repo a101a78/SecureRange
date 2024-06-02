@@ -126,7 +126,7 @@ class CommonCoordinateSystem:
         kf.R *= 10.
         kf.P *= 10.
         kf.Q *= 0.01
-        kf.x[:4] = np.array([x1, y1, x2, y2])
+        kf.x[:4] = np.array([x1, y1, x2, y2]).reshape((4, 1))
 
         self.objects[self.next_id] = {
             'boxes': [(camera_id, x1, y1, x2, y2, timestamp)],
