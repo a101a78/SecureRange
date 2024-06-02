@@ -52,7 +52,7 @@ class VideoProcessor(threading.Thread):
             person_img_tensor = torch.from_numpy(person_img).float().permute(2, 0, 1).unsqueeze(0).cuda()
             with torch.no_grad():
                 feature = self.reid_model(person_img_tensor)
-            self.queue.put((self.camera_id, x1, y1, x2, y2, feature.cpu().numpy(), time.time()))
+            self.queue.put((self.camera_id, x1, y1, x2, y2, feature.cpu().numpy()))
 
     def stop(self):
         self.stop_event.set()
@@ -65,24 +65,24 @@ class CommonCoordinateSystem:
         self.lock = threading.Lock()
         self.logger = logger
 
-    def update(self, camera_id, x1, y1, x2, y2, feature, timestamp):
+    def update(self, camera_id, x1, y1, x2, y2, feature):
         with self.lock:
-            matched = self.match_or_create_object(camera_id, x1, y1, x2, y2, feature, timestamp)
+            matched = self.match_or_create_object(camera_id, x1, y1, x2, y2, feature)
             if not matched:
-                self.create_new_object(camera_id, x1, y1, x2, y2, feature, timestamp)
+                self.create_new_object(camera_id, x1, y1, x2, y2, feature)
 
-    def match_or_create_object(self, camera_id, x1, y1, x2, y2, feature, timestamp):
+    def match_or_create_object(self, camera_id, x1, y1, x2, y2, feature):
         min_cost = float('inf')
         best_match_id = None
 
         for obj_id, data in self.objects.items():
-            cost = self.calculate_cost(data['feature'], feature, data['boxes'][-1], (x1, y1, x2, y2, timestamp))
+            cost = self.calculate_cost(data['feature'], feature, data['boxes'][-1], (x1, y1, x2, y2))
             if cost < min_cost and cost < config.COST_THRESHOLD:
                 min_cost = cost
                 best_match_id = obj_id
 
         if best_match_id is not None:
-            self.objects[best_match_id]['boxes'].append((camera_id, x1, y1, x2, y2, timestamp))
+            self.objects[best_match_id]['boxes'].append((camera_id, x1, y1, x2, y2))
             self.objects[best_match_id]['feature'] = self.update_feature(self.objects[best_match_id]['feature'],
                                                                          feature)
             self.objects[best_match_id]['kf'].update(np.array([x1, y1, x2, y2]))
@@ -105,7 +105,7 @@ class CommonCoordinateSystem:
     def update_feature(old_feature, new_feature, alpha=0.5):
         return alpha * new_feature + (1 - alpha) * old_feature
 
-    def create_new_object(self, camera_id, x1, y1, x2, y2, feature, timestamp):
+    def create_new_object(self, camera_id, x1, y1, x2, y2, feature):
         kf = KalmanFilter(dim_x=8, dim_z=4)
         kf.F = np.array([
             [1, 0, 0, 0, 1, 0, 0, 0],
@@ -129,7 +129,7 @@ class CommonCoordinateSystem:
         kf.x[:4] = np.array([x1, y1, x2, y2]).reshape((4, 1))
 
         self.objects[self.next_id] = {
-            'boxes': [(camera_id, x1, y1, x2, y2, timestamp)],
+            'boxes': [(camera_id, x1, y1, x2, y2)],
             'feature': feature,
             'kf': kf
         }
@@ -162,7 +162,7 @@ class GUI:
         for obj_id, data in objects.items():
             color = self.get_color(obj_id)
             last_center = None
-            for (camera_id, x1, y1, x2, y2, timestamp) in data['boxes']:
+            for (camera_id, x1, y1, x2, y2) in data['boxes']:
                 center_x = (x1 + x2) / 2
                 center_y = (y1 + y2) / 2
                 pygame.draw.circle(self.screen, color, (int(center_x), int(center_y)),
@@ -193,8 +193,8 @@ def process_queue(queues, common_coord_system, stop_event, logger):
     while not stop_event.is_set():
         for q in queues:
             while not q.empty():
-                camera_id, x1, y1, x2, y2, feature, timestamp = q.get()
-                common_coord_system.update(camera_id, x1, y1, x2, y2, feature, timestamp)
+                camera_id, x1, y1, x2, y2, feature = q.get()
+                common_coord_system.update(camera_id, x1, y1, x2, y2, feature)
         time.sleep(config.QUEUE_PROCESS_DELAY)
     logger.log('Stopping queue processing')
 
