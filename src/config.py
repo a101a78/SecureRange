@@ -10,7 +10,7 @@ CONFIDENCE_THRESHOLD = 0.5  # Minimum confidence threshold for object detection
 
 # Feature matching settings
 FEATURE_MATCH_THRESHOLD = 0.5  # Threshold for matching features; higher values mean stricter matching
-COST_THRESHOLD = 1.0  # Maximum allowed cost for matching objects between frames
+COST_THRESHOLD = 0.25  # Maximum allowed cost for matching objects between frames
 
 # Detection settings
 FRAME_SKIP = 5  # Number of frames to skip between each detection

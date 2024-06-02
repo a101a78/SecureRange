@@ -97,9 +97,14 @@ class CommonCoordinateSystem:
 
         center1 = np.array([(box1[0] + box1[2]) / 2, (box1[1] + box1[3]) / 2])
         center2 = np.array([(box2[0] + box2[2]) / 2, (box2[1] + box2[3]) / 2])
-        distance_cost = np.linalg.norm(center1 - center2)
+        distance = np.linalg.norm(center1 - center2)
 
-        return feature_cost + distance_cost
+        max_distance = np.linalg.norm([config.GUI_SETTINGS['WINDOW_WIDTH'], config.GUI_SETTINGS['WINDOW_HEIGHT']])
+        distance_cost = distance / max_distance
+
+        total_cost = 0.5 * feature_cost + 0.5 * distance_cost
+
+        return total_cost
 
     @staticmethod
     def update_feature(old_feature, new_feature, alpha=0.5):
