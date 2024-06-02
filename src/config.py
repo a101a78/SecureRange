@@ -1,12 +1,14 @@
 # Video settings
 VIDEO_FILES = [
-    "videos/camera1.mp4",
-    "videos/camera2.mp4",
+    "videos/camera1-1.mp4",
+    "videos/camera1-2.mp4",
 ]
 
 # YOLO model settings
 YOLO_MODEL_PATH = "yolov8x.pt"
 CONFIDENCE_THRESHOLD = 0.5  # Minimum confidence threshold for object detection
+
+FEATURE_MATCH_THRESHOLD = 0.5
 
 # Detection settings
 FRAME_SKIP = 5  # Number of frames to skip between each detection
