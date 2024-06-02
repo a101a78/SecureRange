@@ -7,6 +7,7 @@ import numpy as np
 import pygame
 import torch
 import torchreid
+from sklearn.metrics.pairwise import cosine_similarity
 from ultralytics import YOLO
 
 from src import config
@@ -91,8 +92,8 @@ class CommonCoordinateSystem:
 
     @staticmethod
     def is_same_person(feature1, feature2):
-        dist = np.linalg.norm(feature1 - feature2)
-        return dist < config.FEATURE_MATCH_THRESHOLD
+        similarity = cosine_similarity(feature1.reshape(1, -1), feature2.reshape(1, -1))[0][0]
+        return similarity > config.FEATURE_MATCH_THRESHOLD
 
     def create_new_object(self, camera_id, x1, y1, x2, y2, feature, timestamp):
         self.objects[self.next_id] = {
@@ -103,7 +104,7 @@ class CommonCoordinateSystem:
 
     def get_objects(self):
         with self.lock:
-            return self.objects
+            return self.objects.copy()
 
 
 class GUI:
@@ -115,16 +116,28 @@ class GUI:
         self.clock = pygame.time.Clock()
         self.common_coord_system = common_coord_system
         self.logger = logger
+        self.colors = {}
+
+    def get_color(self, obj_id):
+        if obj_id not in self.colors:
+            self.colors[obj_id] = (np.random.randint(0, 255), np.random.randint(0, 255), np.random.randint(0, 255))
+        return self.colors[obj_id]
 
     def update_gui(self):
         self.screen.fill(config.GUI_SETTINGS['BACKGROUND_COLOR'])
         objects = self.common_coord_system.get_objects()
         for obj_id, data in objects.items():
+            color = self.get_color(obj_id)
             for (camera_id, x1, y1, x2, y2, timestamp) in data['boxes']:
                 center_x = (x1 + x2) / 2
                 center_y = (y1 + y2) / 2
-                pygame.draw.circle(self.screen, config.GUI_SETTINGS['CIRCLE_COLOR'], (int(center_x), int(center_y)),
+                pygame.draw.circle(self.screen, color, (int(center_x), int(center_y)),
                                    config.GUI_SETTINGS['CIRCLE_RADIUS'])
+                pygame.draw.line(self.screen, color, (int(center_x), int(center_y)),
+                                 (int(center_x) + 10, int(center_y) + 10), 2)
+                font = pygame.font.SysFont('Arial', 12)
+                text_surface = font.render(f'ID: {obj_id}', True, color)
+                self.screen.blit(text_surface, (int(center_x), int(center_y)))
         pygame.display.flip()
 
     def run(self):
@@ -166,7 +179,7 @@ def main():
         gui = GUI(common_coord_system, logger)
 
         reid_model = torchreid.models.build_model(
-            name='osnet_x1_0',
+            name='resnet50',
             num_classes=1000,
             loss='softmax',
             pretrained=True
