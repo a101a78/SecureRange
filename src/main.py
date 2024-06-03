@@ -144,6 +144,11 @@ class CommonCoordinateSystem:
 
         Raises:
             RuntimeError: If the x-coordinates from both cameras are identical.
+
+        The roles of the coordinates are as follows:
+            - x: Represents the horizontal position of the object.
+            - y: Represents the vertical position of the object.
+            - z: Represents the distance from the camera to the object (depth).
         """
         dx = x1 - x2
         if dx == 0:
