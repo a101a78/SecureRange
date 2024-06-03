@@ -3,7 +3,6 @@ import time
 from queue import Queue
 
 import cv2
-import numpy as np
 import pygame
 from ultralytics import YOLO
 
@@ -12,6 +11,20 @@ from utils.logger import AsyncLogger
 
 
 class VideoProcessor(threading.Thread):
+    """
+    Thread class for processing video frames and detecting objects using YOLO model.
+
+    Args:
+        video_path (str): Path to the video file.
+        queue (Queue): Queue to store detected bounding boxes.
+        camera_id (int): ID of the camera (video file).
+        logger (AsyncLogger): Logger instance for logging messages.
+
+    Methods:
+        run: Starts the video processing thread.
+        stop: Stops the video processing thread.
+    """
+
     def __init__(self, video_path, queue, camera_id, logger):
         super().__init__()
         self.video_path = video_path
@@ -23,6 +36,12 @@ class VideoProcessor(threading.Thread):
         self.logger = logger
 
     def run(self):
+        """
+        Starts processing the video and detecting objects. Detected objects are placed in the queue.
+
+        Raises:
+            RuntimeError: If a frame cannot be read from the video file.
+        """
         self.logger.log(f'Starting video processing for camera {self.camera_id}')
         while not self.stop_event.is_set() and self.cap.isOpened():
             for _ in range(config.FRAME_SKIP):
@@ -40,10 +59,25 @@ class VideoProcessor(threading.Thread):
         self.cap.release()
 
     def stop(self):
+        """
+        Stops the video processing thread.
+        """
         self.stop_event.set()
 
 
 class CommonCoordinateSystem:
+    """
+    Class to manage the common coordinate system for multi-camera object tracking.
+
+    Args:
+        logger (AsyncLogger): Logger instance for logging messages.
+
+    Methods:
+        update: Updates the coordinate system with detected object coordinates from a camera.
+        get_triangulated_coordinates: Gets the triangulated coordinates from multiple cameras.
+        triangulate: Static method to calculate the real-world coordinates using triangulation.
+    """
+
     def __init__(self, logger):
         self.objects = {}
         self.next_id = 0
@@ -51,36 +85,85 @@ class CommonCoordinateSystem:
         self.logger = logger
 
     def update(self, camera_id, x1, y1, x2, y2):
+        """
+        Updates the common coordinate system with the detected object coordinates from a camera.
+
+        Args:
+            camera_id (int): ID of the camera.
+            x1 (float): Top-left x-coordinate of the bounding box.
+            y1 (float): Top-left y-coordinate of the bounding box.
+            x2 (float): Bottom-right x-coordinate of the bounding box.
+            y2 (float): Bottom-right y-coordinate of the bounding box.
+        """
         with self.lock:
             center_x = (x1 + x2) / 2
             center_y = (y1 + y2) / 2
-            common_x = center_x / config.COMMON_COORDINATE_SYSTEM_SCALE
-            common_y = center_y / config.COMMON_COORDINATE_SYSTEM_SCALE
-            matched = False
 
-            for obj_id, data in self.objects.items():
-                dist = np.sqrt((data['cx'] - common_x) ** 2 + (data['cy'] - common_y) ** 2)
-                if dist < config.COORDINATE_MATCH_THRESHOLD:
-                    self.objects[obj_id]['boxes'].append((camera_id, x1, y1, x2, y2))
-                    self.objects[obj_id]['cx'] = common_x
-                    self.objects[obj_id]['cy'] = common_y
-                    matched = True
-                    break
+            if camera_id not in self.objects:
+                self.objects[camera_id] = []
 
-            if not matched:
-                self.objects[self.next_id] = {
-                    'boxes': [(camera_id, x1, y1, x2, y2)],
-                    'cx': common_x,
-                    'cy': common_y
-                }
-                self.next_id += 1
+            self.objects[camera_id].append((center_x, center_y))
 
-    def get_objects(self):
-        with self.lock:
-            return self.objects
+    def get_triangulated_coordinates(self):
+        """
+        Gets the triangulated coordinates from multiple cameras.
+
+        Returns:
+            list: List of tuples representing the triangulated coordinates (x, y, z).
+        """
+        triangulated_coords = []
+        if len(self.objects) >= 2:
+            keys = list(self.objects.keys())
+            for idx1 in range(len(keys)):
+                for idx2 in range(idx1 + 1, len(keys)):
+                    cam1 = self.objects[keys[idx1]]
+                    cam2 = self.objects[keys[idx2]]
+                    for (x1, y1), (x2, _) in zip(cam1, cam2):
+                        try:
+                            triangulated_coord = self.triangulate(x1, y1, x2)
+                            triangulated_coords.append(triangulated_coord)
+                        except RuntimeError as e:
+                            self.logger.log(f'Error during triangulation: {e}')
+        return triangulated_coords
+
+    @staticmethod
+    def triangulate(x1, y1, x2):
+        """
+        Calculates the real-world coordinates using triangulation.
+
+        Args:
+            x1 (float): x-coordinate from the first camera.
+            y1 (float): y-coordinate from the first camera.
+            x2 (float): x-coordinate from the second camera.
+
+        Returns:
+            tuple: Real-world coordinates (x, y, z).
+
+        Raises:
+            RuntimeError: If the x-coordinates from both cameras are identical.
+        """
+        dx = x1 - x2
+        if dx == 0:
+            raise RuntimeError(f'Identical x-coordinates for triangulation: x1={x1}, x2={x2}')
+        z = config.CAMERA_DISTANCE / abs(dx)
+        x = x1 * z
+        y = y1 * z
+        return x, y, z
 
 
 class GUI:
+    """
+    Class to manage the graphical user interface for displaying tracked objects.
+
+    Args:
+        common_coord_system (CommonCoordinateSystem): Instance of the CommonCoordinateSystem class.
+        logger (AsyncLogger): Logger instance for logging messages.
+
+    Methods:
+        update_gui: Updates the GUI with the latest tracked object coordinates.
+        run: Runs the GUI event loop.
+    """
+
     def __init__(self, common_coord_system, logger):
         pygame.init()
         self.screen = pygame.display.set_mode(
@@ -91,17 +174,27 @@ class GUI:
         self.logger = logger
 
     def update_gui(self):
+        """
+        Updates the GUI with the latest tracked object coordinates.
+        """
         self.screen.fill(config.GUI_SETTINGS["BACKGROUND_COLOR"])
-        objects = self.common_coord_system.get_objects()
-        for obj_id, data in objects.items():
-            for (camera_id, x1, y1, x2, y2) in data['boxes']:
-                center_x = (x1 + x2) / 2
-                center_y = (y1 + y2) / 2
-                pygame.draw.circle(self.screen, config.GUI_SETTINGS["CIRCLE_COLOR"], (int(center_x), int(center_y)),
+        triangulated_coords = self.common_coord_system.get_triangulated_coordinates()
+        for coord in triangulated_coords:
+            if coord is not None:
+                x, y, z = coord
+                screen_x = int(x / z * config.SCALE_FACTOR)
+                screen_y = int(y / z * config.SCALE_FACTOR)
+                pygame.draw.circle(self.screen, config.GUI_SETTINGS["CIRCLE_COLOR"], (screen_x, screen_y),
                                    config.GUI_SETTINGS["CIRCLE_RADIUS"])
         pygame.display.flip()
 
     def run(self):
+        """
+        Runs the GUI event loop.
+
+        Raises:
+            pygame.error: If an error occurs in the Pygame event loop.
+        """
         self.logger.log('Starting GUI')
         running = True
         while running:
@@ -116,44 +209,47 @@ class GUI:
 
 def main():
     with AsyncLogger() as logger:
-        logger.log('Starting main function')
+        try:
+            logger.log('Starting main function')
 
-        common_coord_system = CommonCoordinateSystem(logger)
-        gui = GUI(common_coord_system, logger)
+            common_coord_system = CommonCoordinateSystem(logger)
+            gui = GUI(common_coord_system, logger)
 
-        queues = [Queue() for _ in config.VIDEO_FILES]
-        video_processors = [VideoProcessor(video_path, queues[i], i, logger) for i, video_path in
-                            enumerate(config.VIDEO_FILES)]
+            queues = [Queue() for _ in config.VIDEO_FILES]
+            video_processors = [VideoProcessor(video_path, queues[i], i, logger) for i, video_path in
+                                enumerate(config.VIDEO_FILES)]
 
-        for vp in video_processors:
-            vp.start()
+            for vp in video_processors:
+                vp.start()
 
-        stop_event = threading.Event()
+            stop_event = threading.Event()
 
-        def process_queue():
-            logger.log('Starting queue processing')
-            while not stop_event.is_set():
-                for q in queues:
-                    while not q.empty():
-                        camera_id, x1, y1, x2, y2 = q.get()
-                        common_coord_system.update(camera_id, x1, y1, x2, y2)
-                time.sleep(config.QUEUE_PROCESS_DELAY)
-            logger.log('Stopping queue processing')
+            def process_queue():
+                logger.log('Starting queue processing')
+                while not stop_event.is_set():
+                    for q in queues:
+                        while not q.empty():
+                            camera_id, x1, y1, x2, y2 = q.get()
+                            common_coord_system.update(camera_id, x1, y1, x2, y2)
+                    time.sleep(config.QUEUE_PROCESS_DELAY)
+                logger.log('Stopping queue processing')
 
-        queue_thread = threading.Thread(target=process_queue)
-        queue_thread.daemon = True
-        queue_thread.start()
+            queue_thread = threading.Thread(target=process_queue)
+            queue_thread.daemon = True
+            queue_thread.start()
 
-        gui.run()
+            gui.run()
 
-        stop_event.set()
-        for vp in video_processors:
-            vp.stop()
-            vp.join()
+            stop_event.set()
+            for vp in video_processors:
+                vp.stop()
+                vp.join()
 
-        queue_thread.join()
+            queue_thread.join()
 
-        logger.log('Stopping main function')
+            logger.log('Stopping main function')
+        except Exception as e:
+            logger.log(f'Unhandled exception: {e}')
 
 
 if __name__ == "__main__":

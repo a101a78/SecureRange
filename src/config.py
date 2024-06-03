@@ -34,3 +34,7 @@ GUI_SETTINGS = {
 
 # Queue processing delay
 QUEUE_PROCESS_DELAY = 0.05  # Delay between each queue processing cycle in seconds
+
+# Triangulation settings
+SCALE_FACTOR = 1.0  # Scale factor for converting real-world coordinates to screen coordinates
+CAMERA_DISTANCE = 1.0  # Distance between the two cameras for triangulation
