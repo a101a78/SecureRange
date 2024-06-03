@@ -1,3 +1,4 @@
+import math
 import threading
 import time
 from queue import Queue
@@ -106,7 +107,7 @@ class CommonCoordinateSystem:
 
     def get_triangulated_coordinates(self):
         """
-        Gets the triangulated coordinates from multiple cameras.
+        Get the triangulated coordinates from multiple cameras.
 
         Returns:
             list: List of tuples representing the triangulated coordinates (x, y, z).
@@ -118,23 +119,25 @@ class CommonCoordinateSystem:
                 for idx2 in range(idx1 + 1, len(keys)):
                     cam1 = self.objects[keys[idx1]]
                     cam2 = self.objects[keys[idx2]]
+                    camera_distance = self.calculate_camera_distance(keys[idx1], keys[idx2])
                     for (x1, y1), (x2, _) in zip(cam1, cam2):
                         try:
-                            triangulated_coord = self.triangulate(x1, y1, x2)
+                            triangulated_coord = self.triangulate(x1, y1, x2, camera_distance)
                             triangulated_coords.append(triangulated_coord)
                         except RuntimeError as e:
                             self.logger.log(f'Error during triangulation: {e}')
         return triangulated_coords
 
     @staticmethod
-    def triangulate(x1, y1, x2):
+    def triangulate(x1, y1, x2, camera_distance):
         """
-        Calculates the real-world coordinates using triangulation.
+        Calculate the real-world coordinates using triangulation.
 
         Args:
             x1 (float): x-coordinate from the first camera.
             y1 (float): y-coordinate from the first camera.
             x2 (float): x-coordinate from the second camera.
+            camera_distance (float): Distance between the two cameras.
 
         Returns:
             tuple: Real-world coordinates (x, y, z).
@@ -145,10 +148,34 @@ class CommonCoordinateSystem:
         dx = x1 - x2
         if dx == 0:
             raise RuntimeError(f'Identical x-coordinates for triangulation: x1={x1}, x2={x2}')
-        z = config.CAMERA_DISTANCE / abs(dx)
+        z = camera_distance / abs(dx)
         x = x1 * z
         y = y1 * z
         return x, y, z
+
+    @staticmethod
+    def calculate_camera_distance(cam1_id, cam2_id):
+        """
+        Calculate the distance between two cameras based on their IDs.
+
+        Args:
+            cam1_id (int): ID of the first camera.
+            cam2_id (int): ID of the second camera.
+
+        Returns:
+            float: Distance between the two cameras.
+
+        Raises:
+            ValueError: If the camera pair is unknown.
+        """
+        cam_pair = {cam1_id, cam2_id}
+        if cam_pair == {0, 1} or cam_pair == {0, 2}:
+            return math.sqrt((config.TRIANGULATION_SETTINGS['FIELD_WIDTH'] / 2) ** 2 + config.TRIANGULATION_SETTINGS[
+                'FIELD_HEIGHT'] ** 2)
+        elif cam_pair == {1, 2}:
+            return config.TRIANGULATION_SETTINGS['FIELD_WIDTH']
+        else:
+            raise ValueError(f'Unknown camera pair: {cam1_id}, {cam2_id}')
 
 
 class GUI:
@@ -182,8 +209,8 @@ class GUI:
         for coord in triangulated_coords:
             if coord is not None:
                 x, y, z = coord
-                screen_x = int(x / z * config.SCALE_FACTOR)
-                screen_y = int(y / z * config.SCALE_FACTOR)
+                screen_x = int(x / z * config.TRIANGULATION_SETTINGS['SCALE_FACTOR'])
+                screen_y = int(y / z * config.TRIANGULATION_SETTINGS['SCALE_FACTOR'])
                 pygame.draw.circle(self.screen, config.GUI_SETTINGS["CIRCLE_COLOR"], (screen_x, screen_y),
                                    config.GUI_SETTINGS["CIRCLE_RADIUS"])
         pygame.display.flip()
