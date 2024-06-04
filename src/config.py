@@ -1,7 +1,8 @@
 # Video settings
 VIDEO_FILES = [
-    "videos/camera1-1.mp4",
-    "videos/camera1-2.mp4",
+    "videos/camera1.mp4",
+    "videos/camera2.mp4",
+    "videos/camera3.mp4",
 ]
 
 # YOLO model settings
@@ -38,6 +39,13 @@ QUEUE_PROCESS_DELAY = 0.05  # Delay between each queue processing cycle in secon
 # Triangulation settings
 TRIANGULATION_SETTINGS = {
     "SCALE_FACTOR": 1.0,  # Scale factor for converting real-world coordinates to screen coordinates
-    "FIELD_WIDTH": 10.0,  # Width of the field in meters
-    "FIELD_HEIGHT": 5.0  # Height of the field in meters
+    "FIELD_WIDTH": 3.2,  # Width of the field in meters
+    "FIELD_HEIGHT": 8.56,  # Height of the field in meters
+
+    # Camera position settings (x, y, z coordinates in meters)
+    "CAMERA_POSITIONS": [
+        (0, 0, 2),
+        (3.2, 0, 2),
+        (1.6, 8.56, 2),
+    ]
 }
