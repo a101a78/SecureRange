@@ -1,16 +1,18 @@
+import numpy as np
+
 # Video settings
 VIDEO_FILES = [
-    "videos/camera1.mp4",
-    "videos/camera2.mp4",
-    "videos/camera3.mp4",
-]
+    'videos/camera1.mp4',
+    'videos/camera2.mp4',
+    'videos/camera3.mp4',
+]  # Paths to video files
 
 # YOLO model settings
-YOLO_MODEL_PATH = "yolov8x.pt"
+YOLO_MODEL_PATH = 'yolov8x.pt'  # Path to the YOLO model file
 CONFIDENCE_THRESHOLD = 0.5  # Minimum confidence threshold for object detection
 
 # Feature matching settings
-FEATURE_MATCH_THRESHOLD = 0.5  # Threshold for matching features; higher values mean stricter matching
+FEATURE_MATCH_THRESHOLD = 0.5  # Threshold for matching features (higher is stricter)
 COST_THRESHOLD = 0.25  # Maximum allowed cost for matching objects between frames
 
 # Detection settings
@@ -22,15 +24,15 @@ COORDINATE_MATCH_THRESHOLD = 5  # Threshold for matching coordinates between fra
 
 # Pygame GUI settings
 GUI_SETTINGS = {
-    "WINDOW_TITLE": "Multi-Camera Tracking System",
-    "WINDOW_WIDTH": 800,
-    "WINDOW_HEIGHT": 600,
-    "FRAME_RATE": 60,  # Frame rate for the GUI update loop
-    "BACKGROUND_COLOR": (255, 255, 255),
-    "CIRCLE_COLOR": (255, 0, 0),
-    "CIRCLE_RADIUS": 3,
-    "TEXT_COLOR": (0, 0, 255),
-    "FONT_SIZE": 24
+    'WINDOW_TITLE': 'Multi-Camera Tracking System',  # Title of the GUI window
+    'WINDOW_WIDTH': 800,  # Width of the GUI window in pixels
+    'WINDOW_HEIGHT': 600,  # Height of the GUI window in pixels
+    'FRAME_RATE': 60,  # Target frame rate for the GUI update loop
+    'BACKGROUND_COLOR': (255, 255, 255),  # Background color
+    'CIRCLE_COLOR': (255, 0, 0),  # Color of the circles representing objects
+    'CIRCLE_RADIUS': 3,  # Radius of the circles in pixels
+    'TEXT_COLOR': (0, 0, 255),  # Color of the text displaying object coordinates
+    'FONT_SIZE': 24  # Font size for the text
 }
 
 # Queue processing delay
@@ -38,14 +40,18 @@ QUEUE_PROCESS_DELAY = 0.05  # Delay between each queue processing cycle in secon
 
 # Triangulation settings
 TRIANGULATION_SETTINGS = {
-    "SCALE_FACTOR": 1.0,  # Scale factor for converting real-world coordinates to screen coordinates
-    "FIELD_WIDTH": 3.2,  # Width of the field in meters
-    "FIELD_HEIGHT": 8.56,  # Height of the field in meters
-
-    # Camera position settings (x, y, z coordinates in meters)
-    "CAMERA_POSITIONS": [
-        (0, 0, 2),
-        (3.2, 0, 2),
-        (1.6, 8.56, 2),
+    'SCALE_FACTOR': None,  # Scale factor (automatically calculated if None)
+    'FIELD_WIDTH': 3.2,  # Width of the field (in meters)
+    'FIELD_HEIGHT': 8.56,  # Height of the field (in meters)
+    'CAMERA_POSITIONS': [  # Camera positions (x, y, z coordinates in meters)
+        (0, 0, 1.7),
+        (3.2, 0, 1.7),
+        (3.2, 8.56, 1.7),
     ]
 }
+
+# Calculate SCALE_FACTOR automatically if not provided
+if TRIANGULATION_SETTINGS['SCALE_FACTOR'] is None:
+    field_area = TRIANGULATION_SETTINGS['FIELD_WIDTH'] * TRIANGULATION_SETTINGS['FIELD_HEIGHT']
+    gui_area = GUI_SETTINGS['WINDOW_WIDTH'] * GUI_SETTINGS['WINDOW_HEIGHT']
+    TRIANGULATION_SETTINGS['SCALE_FACTOR'] = np.sqrt(gui_area / field_area)
