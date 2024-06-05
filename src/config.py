@@ -11,18 +11,12 @@ VIDEO_FILES = [
 YOLO_MODEL_PATH = 'yolov8x.pt'  # Path to the YOLO model file
 CONFIDENCE_THRESHOLD = 0.5  # Minimum confidence threshold for object detection
 
-# Feature matching settings
-FEATURE_MATCH_THRESHOLD = 0.5  # Threshold for matching features (higher is stricter)
-COST_THRESHOLD = 0.25  # Maximum allowed cost for matching objects between frames
-
 # Detection settings
 FRAME_SKIP = 5  # Number of frames to skip between each detection
+OBJECT_TIMEOUT = 1000  # Maximum time (in milliseconds) for an object to be considered lost
+MAX_DISTANCE_THRESHOLD = 50  # Maximum distance (in pixels) to consider two objects as the same
 
-# Coordinate system settings
-COMMON_COORDINATE_SYSTEM_SCALE = 1000  # Scale factor for converting to a common coordinate system
-COORDINATE_MATCH_THRESHOLD = 5  # Threshold for matching coordinates between frames
-
-# Pygame GUI settings
+# GUI settings
 GUI_SETTINGS = {
     'WINDOW_TITLE': 'Multi-Camera Tracking System',  # Title of the GUI window
     'WINDOW_WIDTH': 800,  # Width of the GUI window in pixels

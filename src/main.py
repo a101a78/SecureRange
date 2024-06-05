@@ -33,7 +33,9 @@ class VideoProcessor(threading.Thread):
         self.logger = logger
 
     def run(self):
-        """Processes the video and detects objects, placing them in the queue."""
+        """
+        Processes the video and detects objects, placing their coordinates in the queue.
+        """
         self.logger.log(f'Starting video processing for camera {self.camera_id}')
         while not self.stop_event.is_set() and self.cap.isOpened():
             for _ in range(config.FRAME_SKIP):
@@ -42,15 +44,11 @@ class VideoProcessor(threading.Thread):
             if not success:
                 self.logger.log(f'Failed to read frame for camera {self.camera_id}')
                 break
-            results = self.model(frame, conf=config.CONFIDENCE_THRESHOLD)
+            results = self.model(frame, device=0, classes=0, conf=config.CONFIDENCE_THRESHOLD)
             boxes = results[0].boxes
-            tracked_object_ids = set()
             for box in boxes:
                 x1, y1, x2, y2 = box.xyxy.cpu().numpy()[0]
-                object_id = int(box.id.item())
-                self.queue.put((self.camera_id, x1, y1, x2, y2, object_id))
-                tracked_object_ids.add(object_id)
-            self.queue.put(("remove_untracked", tracked_object_ids))
+                self.queue.put((self.camera_id, x1, y1, x2, y2))
 
         self.logger.log(f'Stopping video processing for camera {self.camera_id}')
         self.cap.release()
@@ -61,7 +59,9 @@ class VideoProcessor(threading.Thread):
 
 
 class CommonCoordinateSystem:
-    """Manages the common coordinate system for multi-camera object tracking."""
+    """
+    Manages the common coordinate system for multi-camera object tracking.
+    """
 
     def __init__(self, logger):
         """
@@ -73,9 +73,19 @@ class CommonCoordinateSystem:
         self.objects = {}
         self.lock = threading.Lock()
         self.logger = logger
+        self.object_counter = 0
 
-    def update(self, camera_id, x1, y1, x2, y2, object_id):
-        """Updates the common coordinate system with detected object coordinates."""
+    def update(self, camera_id, x1, y1, x2, y2):
+        """
+        Updates the common coordinate system with detected object coordinates.
+
+        Args:
+            camera_id (int): ID of the camera.
+            x1 (float): x-coordinate of the top-left corner of the bounding box.
+            y1 (float): y-coordinate of the top-left corner of the bounding box.
+            x2 (float): x-coordinate of the bottom-right corner of the bounding box.
+            y2 (float): y-coordinate of the bottom-right corner of the bounding box.
+        """
         with self.lock:
             center_x = (x1 + x2) / 2
             center_y = (y1 + y2) / 2
@@ -83,22 +93,49 @@ class CommonCoordinateSystem:
             if camera_id not in self.objects:
                 self.objects[camera_id] = {}
 
-            self.objects[camera_id][object_id] = (center_x, center_y)
+            # Find the closest existing object or create a new one
+            closest_object_id, min_distance = None, float('inf')
+            for object_id, (x, y, _) in self.objects[camera_id].items():
+                distance = np.sqrt((center_x - x) ** 2 + (center_y - y) ** 2)
+                if distance < min_distance and distance < config.MAX_DISTANCE_THRESHOLD:
+                    closest_object_id, min_distance = object_id, distance
+
+            if closest_object_id is None:
+                self.object_counter += 1
+                closest_object_id = self.object_counter
+
+            self.objects[camera_id][closest_object_id] = (center_x, center_y, pygame.time.get_ticks())
 
     def remove_untracked_objects(self, camera_id, tracked_object_ids):
-        """Removes untracked objects from the common coordinate system."""
+        """
+        Removes untracked objects from the common coordinate system.
+
+        Args:
+            camera_id (int): ID of the camera.
+            tracked_object_ids (set): Set of object IDs that are currently being tracked.
+        """
         with self.lock:
             if camera_id in self.objects:
-                self.objects[camera_id] = {obj_id: coords for obj_id, coords in self.objects[camera_id].items()
-                                           if obj_id in tracked_object_ids}
+                self.objects[camera_id] = {
+                    obj_id: coords for obj_id, coords in self.objects[camera_id].items()
+                    if obj_id in tracked_object_ids or pygame.time.get_ticks() - coords[2] < config.OBJECT_TIMEOUT
+                }
 
     def get_triangulated_coordinates(self, use_weighted_average=True):
-        """Gets the triangulated coordinates from multiple cameras."""
+        """
+        Gets the triangulated coordinates from multiple cameras.
+
+        Args:
+            use_weighted_average (bool): Whether to use weighted average for triangulation.
+
+        Returns:
+            list: List of triangulated coordinates (object_id, x, y, z).
+        """
         with self.lock:
             all_object_coords = []
             for camera_id, objects in self.objects.items():
-                for object_id, coords in objects.items():
-                    all_object_coords.append((object_id, camera_id, *coords))
+                for object_id, (x, y, _) in objects.items():
+                    all_object_coords.append((object_id, camera_id, x, y))
 
             if len(all_object_coords) < 2:
                 return []
@@ -119,7 +156,7 @@ class CommonCoordinateSystem:
                             list(zip(xs[mask], ys[mask])),
                             config.TRIANGULATION_SETTINGS["CAMERA_POSITIONS"][camera_ids[mask]],
                         )
-                        triangulated_coords.append(triangulated_coord)
+                        triangulated_coords.append((object_id, *triangulated_coord))
                     except np.linalg.LinAlgError as e:
                         self.logger.log(f'Error during multi-camera triangulation: {e}')
 
@@ -176,7 +213,9 @@ class CommonCoordinateSystem:
 
 
 class GUI:
-    """Class to manage the graphical user interface for displaying tracked objects."""
+    """
+    Class to manage the graphical user interface for displaying tracked objects.
+    """
 
     def __init__(self, common_coord_system, logger):
         """
@@ -197,38 +236,48 @@ class GUI:
         self.font = pygame.font.Font(None, config.GUI_SETTINGS["FONT_SIZE"])
 
     def update_gui(self):
-        """Updates the GUI with the latest tracked object coordinates and information."""
+        """
+        Updates the GUI with the latest tracked object coordinates and information.
+        """
         self.screen.fill(config.GUI_SETTINGS["BACKGROUND_COLOR"])
 
         triangulated_coords = self.common_coord_system.get_triangulated_coordinates(use_weighted_average=True)
 
-        for coord in triangulated_coords:
-            if coord is not None:
-                x, y, z = coord
-                screen_x = int(x / z * config.TRIANGULATION_SETTINGS["SCALE_FACTOR"])
-                screen_y = int(y / z * config.TRIANGULATION_SETTINGS["SCALE_FACTOR"])
+        for object_id, x, y, z in triangulated_coords:
+            # Check if z-coordinate is not zero to avoid division by zero
+            if z != 0:
+                # Convert 3D coordinates to 2D screen coordinates
+                screen_x = int(x / z * config.TRIANGULATION_SETTINGS["SCALE_FACTOR"]) + config.GUI_SETTINGS[
+                    "WINDOW_WIDTH"] // 2
+                screen_y = int(y / z * config.TRIANGULATION_SETTINGS["SCALE_FACTOR"]) + config.GUI_SETTINGS[
+                    "WINDOW_HEIGHT"] // 2
+
+                # Draw a circle to represent the object
                 pygame.draw.circle(
                     self.screen, config.GUI_SETTINGS["CIRCLE_COLOR"], (screen_x, screen_y),
                     config.GUI_SETTINGS["CIRCLE_RADIUS"]
                 )
 
-                # Display additional information (optional)
                 coord_text = self.font.render(
-                    f"({x:.2f}, {y:.2f}, {z:.2f})", True, config.GUI_SETTINGS["TEXT_COLOR"]
+                    f"ID:{object_id} ({x:.2f}, {y:.2f}, {z:.2f})", True, config.GUI_SETTINGS["TEXT_COLOR"]
                 )
                 self.screen.blit(coord_text, (screen_x + 5, screen_y + 5))
 
         pygame.display.flip()
 
     def run(self):
-        """Runs the GUI event loop."""
+        """
+        Runs the GUI event loop.
+        """
         self.logger.log("Starting GUI")
         running = True
         while running:
+            # Handle events
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
 
+            # Update and render the GUI
             self.update_gui()
             self.clock.tick(config.GUI_SETTINGS["FRAME_RATE"])
 
@@ -237,57 +286,60 @@ class GUI:
 
 
 def main():
-    """Main function to run the multi-camera tracking system."""
+    """
+    Main function to run the multi-camera tracking system.
+    """
     with AsyncLogger() as logger:
         try:
             logger.log('Starting main function')
 
+            # Initialize common coordinate system and GUI
             common_coord_system = CommonCoordinateSystem(logger)
             gui = GUI(common_coord_system, logger)
 
+            # Create queues for each video file and start video processors
             queues = [Queue() for _ in config.VIDEO_FILES]
             video_processors = [
                 VideoProcessor(video_path, queues[i], i, logger)
                 for i, video_path in enumerate(config.VIDEO_FILES)
             ]
-
             for vp in video_processors:
                 vp.start()
 
+            # Create events for stopping and syncing threads
             stop_event = threading.Event()
             queue_event = threading.Event()
 
             def process_queue():
-                """Processes the queue of detected object coordinates."""
+                """
+                Processes the queue of detected object coordinates.
+                """
                 logger.log('Starting queue processing')
                 while not stop_event.is_set():
                     for q in queues:
                         while not q.empty():
-                            data = q.get()
-                            if data[0] == "remove_untracked":
-                                camera_id = data[1]
-                                tracked_object_ids = data[2]
-                                common_coord_system.remove_untracked_objects(camera_id, tracked_object_ids)
-                            else:
-                                camera_id, x1, y1, x2, y2, object_id = data  # Unpack object ID
-                                common_coord_system.update(camera_id, x1, y1, x2, y2, object_id)
-                    # Use wait instead of sleep to reduce CPU usage
+                            # Get data from queue and update common coordinate system
+                            camera_id, x1, y1, x2, y2 = q.get()
+                            common_coord_system.update(camera_id, x1, y1, x2, y2)
+                    # Wait for a short delay before processing the next batch of coordinates
                     queue_event.wait(timeout=config.QUEUE_PROCESS_DELAY)
                     queue_event.clear()
                 logger.log('Stopping queue processing')
 
+            # Start queue processing thread
             queue_thread = threading.Thread(target=process_queue)
             queue_thread.daemon = True
             queue_thread.start()
 
+            # Run the GUI
             gui.run()
 
+            # Stop all threads
             stop_event.set()
             queue_event.set()  # Wake up the queue thread so it can exit
             for vp in video_processors:
                 vp.stop()
                 vp.join()
-
             queue_thread.join()
 
             logger.log('Stopping main function')
